@@ -1,0 +1,28 @@
+[Unit]
+Description=BlueBird Legacy Wall kiosk (sway + chromium fullscreen)
+After=bluebird-admin.service network-online.target
+Wants=bluebird-admin.service network-online.target
+ConditionPathExists=/etc/bluebird/configured
+
+[Service]
+Type=simple
+User=bluebird-kiosk
+Group=bluebird-kiosk
+PAMName=login
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+EnvironmentFile=-/etc/bluebird/kiosk.conf
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=WLR_NO_HARDWARE_CURSORS=1
+ExecStartPre=/bin/mkdir -p /run/user/1000
+ExecStartPre=/bin/chown bluebird-kiosk:bluebird-kiosk /run/user/1000
+ExecStart=/usr/bin/sway --config /etc/sway/config
+Restart=always
+RestartSec=2
+StandardInput=tty
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=bluebird-kiosk.target

@@ -1,0 +1,21 @@
+[Unit]
+Description=BlueBird Kiosk heartbeat (POST device status every 60s)
+After=network-online.target bluebird-kiosk.service
+Wants=network-online.target
+PartOf=bluebird-kiosk.target
+
+[Service]
+Type=simple
+User=bluebird-kiosk
+Group=bluebird-kiosk
+EnvironmentFile=-/etc/bluebird/kiosk.conf
+ExecStart=/usr/bin/python3 -m bluebird_kiosk.services.heartbeat
+Restart=always
+RestartSec=10
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=bluebird-kiosk.target

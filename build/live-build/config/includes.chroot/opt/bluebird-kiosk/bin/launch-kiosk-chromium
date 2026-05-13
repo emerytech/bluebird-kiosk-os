@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Launch Chromium pointed at the configured Legacy Wall URL, or a loading
+# splash if the device hasn't been configured yet.
+set -eu
+
+CONF=/etc/bluebird/kiosk.conf
+URL="file:///opt/bluebird-kiosk/share/loading.html"
+
+if [[ -f "$CONF" ]]; then
+  # shellcheck disable=SC1091
+  source "$CONF"
+  if [[ -n "${LEGACY_WALL_URL:-}" ]]; then
+    URL="$LEGACY_WALL_URL"
+  fi
+fi
+
+exec /usr/bin/chromium \
+  --kiosk \
+  --noerrdialogs \
+  --no-first-run \
+  --disable-pinch \
+  --overscroll-history-navigation=0 \
+  --disable-features=TranslateUI \
+  --password-store=basic \
+  --check-for-update-interval=604800 \
+  --start-fullscreen \
+  --incognito \
+  --app="$URL"

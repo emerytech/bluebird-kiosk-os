@@ -1,0 +1,82 @@
+#!/bin/bash
+# Hook: install the bluebird-kiosk Python package, create the kiosk user,
+# and apply system hardening to the chroot during ISO build.
+set -eu
+
+echo "==> bluebird-kiosk: create system user"
+if ! id bluebird-kiosk >/dev/null 2>&1; then
+    adduser --system --group --home /var/lib/bluebird-kiosk --shell /usr/sbin/nologin \
+        --uid 1000 --gid 1000 --disabled-password bluebird-kiosk || true
+fi
+install -d -o bluebird-kiosk -g bluebird-kiosk /var/lib/bluebird-kiosk
+install -d -o bluebird-kiosk -g bluebird-kiosk /etc/bluebird
+
+echo "==> bluebird-kiosk: copy default kiosk.conf"
+if [[ ! -f /etc/bluebird/kiosk.conf ]]; then
+    cp /etc/bluebird/kiosk.conf.example /etc/bluebird/kiosk.conf
+    chown bluebird-kiosk:bluebird-kiosk /etc/bluebird/kiosk.conf
+fi
+
+echo "==> bluebird-kiosk: install python apps"
+# The apps/ tree is rsynced into the chroot by 0005-copy-apps.hook.chroot earlier.
+if [[ -d /opt/bluebird-kiosk/src ]]; then
+    pip3 install --break-system-packages --no-cache-dir /opt/bluebird-kiosk/src/bluebird_kiosk
+    pip3 install --break-system-packages --no-cache-dir /opt/bluebird-kiosk/src/bluebird_gesture
+fi
+
+echo "==> bluebird-kiosk: harden logind (no VT switching)"
+mkdir -p /etc/systemd/logind.conf.d
+cat >/etc/systemd/logind.conf.d/bluebird-kiosk.conf <<'EOF'
+[Login]
+NAutoVTs=0
+ReserveVT=0
+HandlePowerKey=ignore
+HandleSuspendKey=ignore
+HandleHibernateKey=ignore
+HandleLidSwitch=ignore
+KillUserProcesses=no
+EOF
+
+echo "==> bluebird-kiosk: configure greetd for autologin to sway"
+mkdir -p /etc/greetd
+cat >/etc/greetd/config.toml <<'EOF'
+[terminal]
+vt = 1
+
+[default_session]
+command = "agreety --cmd /bin/sh -c 'systemctl start bluebird-kiosk.target && sleep infinity'"
+user = "greeter"
+
+[initial_session]
+command = "systemctl --user start sway"
+user = "bluebird-kiosk"
+EOF
+
+echo "==> bluebird-kiosk: enable services"
+systemctl enable NetworkManager.service
+systemctl enable bluebird-admin.service
+systemctl enable bluebird-firstboot.service
+systemctl enable bluebird-kiosk.service
+systemctl enable bluebird-gesture.service
+systemctl enable bluebird-heartbeat.service
+systemctl enable unattended-upgrades.service
+systemctl set-default bluebird-kiosk.target
+
+echo "==> bluebird-kiosk: configure unattended-upgrades (security pocket only)"
+cat >/etc/apt/apt.conf.d/52bluebird-unattended <<'EOF'
+Unattended-Upgrade::Origins-Pattern {
+    "origin=Debian,codename=${distro_codename},label=Debian-Security";
+};
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-Time "03:00";
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+EOF
+
+echo "==> bluebird-kiosk: disable consoles, ssh, root login"
+systemctl mask getty@tty2.service getty@tty3.service getty@tty4.service \
+    getty@tty5.service getty@tty6.service || true
+systemctl disable ssh.service 2>/dev/null || true
+passwd -l root || true
+
+echo "==> bluebird-kiosk: hook complete"

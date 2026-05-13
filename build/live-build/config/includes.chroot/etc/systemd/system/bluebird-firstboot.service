@@ -1,0 +1,16 @@
+[Unit]
+Description=BlueBird Kiosk first-boot configuration wizard
+Documentation=https://bluebird-alerts.com/docs/kiosk-os
+After=bluebird-admin.service graphical.target
+Wants=bluebird-admin.service
+ConditionPathExists=!/etc/bluebird/configured
+
+[Service]
+Type=oneshot
+User=bluebird-kiosk
+Group=bluebird-kiosk
+ExecStart=/opt/bluebird-kiosk/bin/bluebird-firstboot
+RemainAfterExit=yes
+
+[Install]
+WantedBy=bluebird-kiosk.target

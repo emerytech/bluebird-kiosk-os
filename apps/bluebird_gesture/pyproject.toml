@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bluebird-gesture"
+version = "0.1.0"
+description = "Touchscreen 5-finger long-press detector for BlueBird Kiosk OS"
+requires-python = ">=3.11"
+dependencies = [
+    "evdev>=1.7",
+]
+
+[tool.setuptools.packages.find]
+include = ["bluebird_gesture*"]

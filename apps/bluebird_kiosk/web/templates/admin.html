@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BlueBird Kiosk — Admin</title>
+  <link rel="stylesheet" href="/static/kiosk.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="brand">
+      <div class="dot"></div>
+      <div>
+        <h1>Kiosk Admin</h1>
+        <small>v{{ version }}</small>
+      </div>
+    </header>
+
+    <section id="login" class="card">
+      <h2>Enter admin PIN</h2>
+      <p>This panel is for device troubleshooting only. Tap the screen with five fingers to exit.</p>
+      <input id="login-pin" type="password" inputmode="numeric" maxlength="6" placeholder="● ● ● ● ● ●">
+      <div style="margin-top:16px"><button id="btn-login">Unlock</button></div>
+    </section>
+
+    <section id="panels" style="display:none">
+      <div class="tabs">
+        <button data-tab="network" class="active">Network</button>
+        <button data-tab="display">Display</button>
+        <button data-tab="kiosk">Kiosk</button>
+        <button data-tab="system">System</button>
+      </div>
+
+      <div class="pane active" data-tab="network">
+        <div class="card">
+          <h2>Network</h2>
+          <p id="net-status" class="meta"></p>
+          <div class="wifi-list" id="net-list">Scanning…</div>
+        </div>
+      </div>
+
+      <div class="pane" data-tab="display">
+        <div class="card">
+          <h2>Display</h2>
+          <label>Output</label>
+          <select id="disp-output"></select>
+          <div style="margin-top:12px">
+            <label>Rotation</label>
+            <select id="disp-rotation">
+              <option value="">— no change —</option>
+              <option value="normal">0°</option>
+              <option value="90">90°</option>
+              <option value="180">180°</option>
+              <option value="270">270°</option>
+            </select>
+          </div>
+          <div style="margin-top:12px">
+            <label>Brightness (%)</label>
+            <input id="disp-brightness" type="text" inputmode="numeric" placeholder="100">
+          </div>
+          <div style="margin-top:16px"><button id="btn-disp-apply">Apply</button></div>
+        </div>
+      </div>
+
+      <div class="pane" data-tab="kiosk">
+        <div class="card">
+          <h2>Kiosk</h2>
+          <p><strong>Slug:</strong> <span id="k-slug">—</span></p>
+          <p><strong>URL:</strong> <span id="k-url">—</span></p>
+          <p><strong>Device ID:</strong> <span id="k-device">—</span></p>
+          <p><strong>Version:</strong> <span id="k-version">—</span></p>
+          <div class="row" style="margin-top:16px">
+            <button id="btn-kiosk-restart">Restart kiosk</button>
+            <button id="btn-kiosk-slug" class="secondary">Change school slug</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="pane" data-tab="system">
+        <div class="card">
+          <h2>System</h2>
+          <div class="row">
+            <button id="btn-sys-reboot">Reboot</button>
+            <button id="btn-sys-shutdown" class="secondary">Shut down</button>
+          </div>
+          <div class="row" style="margin-top:12px">
+            <button id="btn-sys-pin" class="secondary">Change PIN</button>
+            <button id="btn-sys-reset" class="danger">Factory reset</button>
+          </div>
+          <div style="margin-top:16px">
+            <button id="btn-sys-logs" class="secondary">View recent logs</button>
+            <pre id="logs-output" style="white-space:pre-wrap;background:var(--bb-bg);padding:12px;border-radius:8px;max-height:300px;overflow:auto;margin-top:8px"></pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div id="toast" class="toast"></div>
+  </div>
+
+  <script src="/static/admin.js"></script>
+</body>
+</html>

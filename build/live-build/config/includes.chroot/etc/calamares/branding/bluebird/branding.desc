@@ -1,0 +1,34 @@
+---
+componentName: bluebird
+
+welcomeStyleCalamares: true
+welcomeExpandingLogo: true
+
+windowExpanding: normal
+windowSize: 900px,600px
+windowPlacement: center
+
+strings:
+    productName:         BlueBird Kiosk OS
+    shortProductName:    BlueBird Kiosk
+    version:             0.1
+    shortVersion:        0.1
+    versionedName:       BlueBird Kiosk OS 0.1
+    shortVersionedName:  BlueBird Kiosk 0.1
+    bootloaderEntryName: BlueBird Kiosk OS
+    productUrl:          https://bluebird-alerts.com
+    supportUrl:          https://bluebird-alerts.com/contact
+    releaseNotesUrl:     https://bluebird-alerts.com/kiosk-os/release-notes
+
+images:
+    productLogo:         logo.png
+    productIcon:         logo.png
+    productWelcome:      welcome.png
+
+slideshow:               show.qml
+
+style:
+   sidebarBackground:    "#0B1220"
+   sidebarText:          "#F9FAFB"
+   sidebarTextSelect:    "#3B82F6"
+   sidebarTextHighlight: "#1E3A8A"

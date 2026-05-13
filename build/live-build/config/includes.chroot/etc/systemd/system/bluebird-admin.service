@@ -1,0 +1,22 @@
+[Unit]
+Description=BlueBird Kiosk admin/firstboot FastAPI service (loopback only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bluebird-kiosk
+Group=bluebird-kiosk
+EnvironmentFile=-/etc/bluebird/kiosk.conf
+WorkingDirectory=/opt/bluebird-kiosk
+ExecStart=/usr/bin/python3 -m bluebird_kiosk.server --bind 127.0.0.1 --port 7311
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/etc/bluebird /var/lib/bluebird-kiosk
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=bluebird-kiosk.target

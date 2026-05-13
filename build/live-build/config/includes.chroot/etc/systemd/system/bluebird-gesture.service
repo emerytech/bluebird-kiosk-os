@@ -1,0 +1,20 @@
+[Unit]
+Description=BlueBird gesture daemon (5-finger long-press → admin overlay)
+After=bluebird-kiosk.service
+Wants=bluebird-kiosk.service
+PartOf=bluebird-kiosk.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -m bluebird_gesture
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+# Needs read access to /dev/input/event* to receive multitouch events.
+SupplementaryGroups=input
+
+[Install]
+WantedBy=bluebird-kiosk.target

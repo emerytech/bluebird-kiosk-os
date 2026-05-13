@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Open the on-screen first-boot wizard in a fullscreen Chromium pointed at
+# the local admin FastAPI server. Blocks until /etc/bluebird/configured exists.
+set -eu
+
+URL="http://127.0.0.1:7311/firstboot"
+
+# Wait for the admin server to come up.
+for _ in $(seq 1 60); do
+  if curl -fs "http://127.0.0.1:7311/_health" >/dev/null; then
+    break
+  fi
+  sleep 1
+done
+
+exec /usr/bin/chromium \
+  --kiosk \
+  --noerrdialogs \
+  --no-first-run \
+  --disable-pinch \
+  --overscroll-history-navigation=0 \
+  --password-store=basic \
+  --app="$URL"

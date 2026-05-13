@@ -1,0 +1,25 @@
+# BlueBird Kiosk OS — runtime configuration.
+# Written by the first-boot wizard. Edits made here take effect on next reboot.
+#
+# All values are also exposed as environment variables to systemd units that
+# include `EnvironmentFile=/etc/bluebird/kiosk.conf`.
+
+# Backend root URL — almost always the production BlueBird host.
+BLUEBIRD_BACKEND=https://bluebird-alerts.com
+
+# School slug, set by the first-boot wizard.
+SCHOOL_SLUG=
+
+# Full URL the kiosk Chromium points at.
+# Derived from BLUEBIRD_BACKEND + SCHOOL_SLUG at firstboot completion.
+LEGACY_WALL_URL=
+
+# Stable device identifier, generated at install time. Never rotate; used as
+# the primary key for the kiosk_devices heartbeat row.
+DEVICE_ID=
+
+# Local admin server port. Loopback only; do not expose publicly.
+ADMIN_PORT=7311
+
+# Heartbeat interval (seconds). Backend rate-limits to one per 30s.
+HEARTBEAT_INTERVAL_SEC=60

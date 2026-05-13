@@ -1,0 +1,35 @@
+// BlueBird Kiosk OS — polkit overrides for the kiosk user.
+//
+// The admin overlay (running as user "bluebird-kiosk") needs to:
+//   - reboot, power off, and restart systemd units
+//   - manage NetworkManager (scan WiFi, connect to networks)
+//
+// We grant these without a password prompt because the kiosk has no keyboard
+// and the admin overlay is itself gated by the device PIN. The PIN is the
+// real security boundary; polkit prompts here would just trap staff with
+// no way to dismiss them.
+
+polkit.addRule(function(action, subject) {
+    if (subject.user !== "bluebird-kiosk") {
+        return polkit.Result.NOT_HANDLED;
+    }
+
+    // systemd reboot / shutdown / unit control
+    var systemdActions = [
+        "org.freedesktop.login1.power-off",
+        "org.freedesktop.login1.power-off-multiple-sessions",
+        "org.freedesktop.login1.reboot",
+        "org.freedesktop.login1.reboot-multiple-sessions",
+        "org.freedesktop.systemd1.manage-units",
+    ];
+    if (systemdActions.indexOf(action.id) !== -1) {
+        return polkit.Result.YES;
+    }
+
+    // NetworkManager: connect / modify / enable wifi
+    if (action.id.indexOf("org.freedesktop.NetworkManager.") === 0) {
+        return polkit.Result.YES;
+    }
+
+    return polkit.Result.NOT_HANDLED;
+});

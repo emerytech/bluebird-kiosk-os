@@ -1,0 +1,11 @@
+#!/bin/bash
+# Copy the bluebird_kiosk and bluebird_gesture Python packages into the chroot
+# before the install hook runs. The actual source tree lives at /work/apps/
+# in the builder container.
+set -eu
+
+if [[ -d /work/apps ]]; then
+    install -d /opt/bluebird-kiosk/src
+    cp -a /work/apps/bluebird_kiosk /opt/bluebird-kiosk/src/
+    cp -a /work/apps/bluebird_gesture /opt/bluebird-kiosk/src/
+fi

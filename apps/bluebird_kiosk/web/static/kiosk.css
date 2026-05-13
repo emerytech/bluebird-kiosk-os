@@ -1,0 +1,195 @@
+:root {
+  --bb-blue: #1E3A8A;
+  --bb-blue-light: #3B82F6;
+  --bb-bg: #0B1220;
+  --bb-card: #111827;
+  --bb-border: #1F2937;
+  --bb-text: #F9FAFB;
+  --bb-muted: #9CA3AF;
+  --bb-success: #10B981;
+  --bb-warn: #F59E0B;
+  --bb-danger: #EF4444;
+  --bb-radius: 12px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bb-bg);
+  color: var(--bb-text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-size: 18px;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 32px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.brand .dot {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: var(--bb-blue-light);
+}
+.brand h1 {
+  font-size: 22px;
+  font-weight: 600;
+  margin: 0;
+}
+.brand small {
+  color: var(--bb-muted);
+}
+
+.card {
+  background: var(--bb-card);
+  border: 1px solid var(--bb-border);
+  border-radius: var(--bb-radius);
+  padding: 24px;
+  margin-bottom: 20px;
+}
+
+.card h2 {
+  margin-top: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+button, .btn {
+  background: var(--bb-blue-light);
+  color: white;
+  border: 0;
+  border-radius: var(--bb-radius);
+  padding: 16px 24px;
+  font-size: 17px;
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: manipulation;
+  min-height: 56px;
+}
+button:active, .btn:active {
+  background: var(--bb-blue);
+}
+button.secondary {
+  background: var(--bb-border);
+  color: var(--bb-text);
+}
+button.danger {
+  background: var(--bb-danger);
+}
+
+input[type="text"], input[type="password"], select {
+  width: 100%;
+  background: var(--bb-bg);
+  color: var(--bb-text);
+  border: 1px solid var(--bb-border);
+  border-radius: var(--bb-radius);
+  padding: 14px 16px;
+  font-size: 17px;
+}
+
+.row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.row > * { flex: 1; }
+
+.tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.tabs button {
+  background: var(--bb-card);
+  color: var(--bb-muted);
+  font-weight: 500;
+  flex: 1;
+  min-width: 120px;
+}
+.tabs button.active {
+  background: var(--bb-blue-light);
+  color: white;
+}
+
+.pane { display: none; }
+.pane.active { display: block; }
+
+.wifi-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.wifi-row {
+  background: var(--bb-bg);
+  border: 1px solid var(--bb-border);
+  border-radius: var(--bb-radius);
+  padding: 14px 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+}
+.wifi-row .ssid { font-weight: 600; }
+.wifi-row .meta { color: var(--bb-muted); font-size: 14px; }
+
+.numpad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  max-width: 360px;
+  margin: 16px auto;
+}
+.numpad button {
+  font-size: 28px;
+  height: 80px;
+  background: var(--bb-card);
+  border: 1px solid var(--bb-border);
+}
+.pin-display {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  margin: 24px 0;
+}
+.pin-dot {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid var(--bb-muted);
+}
+.pin-dot.filled { background: var(--bb-blue-light); border-color: var(--bb-blue-light); }
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 32px;
+  transform: translateX(-50%);
+  background: var(--bb-card);
+  border: 1px solid var(--bb-border);
+  border-radius: var(--bb-radius);
+  padding: 14px 20px;
+  font-weight: 500;
+  opacity: 0;
+  transition: opacity 200ms;
+  pointer-events: none;
+}
+.toast.show { opacity: 1; }
+.toast.success { border-color: var(--bb-success); }
+.toast.error { border-color: var(--bb-danger); }

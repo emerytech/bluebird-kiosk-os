@@ -1,0 +1,6 @@
+[Unit]
+Description=BlueBird Kiosk runtime target
+Documentation=https://bluebird-alerts.com/docs/kiosk-os
+Requires=multi-user.target
+After=multi-user.target NetworkManager.service
+AllowIsolate=yes

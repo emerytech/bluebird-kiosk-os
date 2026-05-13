@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BlueBird Kiosk OS — Setup</title>
+  <link rel="stylesheet" href="/static/kiosk.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="brand">
+      <div class="dot"></div>
+      <div>
+        <h1>BlueBird Kiosk OS</h1>
+        <small>First-time setup</small>
+      </div>
+    </header>
+
+    <section class="step active card" data-step="0">
+      <h2>Welcome</h2>
+      <p>This wizard will connect the kiosk to your network, link it to your school, and set an admin PIN. It takes about two minutes.</p>
+      <button id="btn-start">Begin</button>
+    </section>
+
+    <section class="step card" data-step="1">
+      <h2>Network</h2>
+      <p>Choose a WiFi network, or skip if you've already plugged in an Ethernet cable.</p>
+      <div class="wifi-list" id="wifi-list">Scanning…</div>
+      <div style="margin-top:16px">
+        <button class="secondary" id="wifi-skip" style="display:none">Skip — use Ethernet</button>
+      </div>
+    </section>
+
+    <section class="step card" data-step="2">
+      <h2>School identity</h2>
+      <p>Enter your BlueBird school slug. This is the short identifier in your school's URL, e.g. <code>nen</code> in <code>bluebird-alerts.com/nen/legacy-wall</code>.</p>
+      <input id="slug-input" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="school-slug">
+      <div style="margin-top:16px"><button id="btn-slug">Continue</button></div>
+    </section>
+
+    <section class="step card" data-step="3">
+      <h2>Admin PIN</h2>
+      <p>Set a 6-digit PIN for the device-admin overlay. Used by on-site staff to fix WiFi or display issues. Different from the in-app kiosk PIN.</p>
+
+      <div>
+        <label>Enter PIN</label>
+        <div class="pin-display" id="pin-1-dots">
+          <span class="pin-dot"></span><span class="pin-dot"></span><span class="pin-dot"></span>
+          <span class="pin-dot"></span><span class="pin-dot"></span><span class="pin-dot"></span>
+        </div>
+        <input id="pin-1" type="hidden" value="">
+        <div class="numpad" data-numpad="pin-1">
+          <button data-key="1">1</button><button data-key="2">2</button><button data-key="3">3</button>
+          <button data-key="4">4</button><button data-key="5">5</button><button data-key="6">6</button>
+          <button data-key="7">7</button><button data-key="8">8</button><button data-key="9">9</button>
+          <button data-key="clear" class="secondary">Clear</button>
+          <button data-key="0">0</button>
+          <button data-key="back" class="secondary">⌫</button>
+        </div>
+      </div>
+
+      <div style="margin-top:24px">
+        <label>Confirm PIN</label>
+        <div class="pin-display" id="pin-2-dots">
+          <span class="pin-dot"></span><span class="pin-dot"></span><span class="pin-dot"></span>
+          <span class="pin-dot"></span><span class="pin-dot"></span><span class="pin-dot"></span>
+        </div>
+        <input id="pin-2" type="hidden" value="">
+        <div class="numpad" data-numpad="pin-2">
+          <button data-key="1">1</button><button data-key="2">2</button><button data-key="3">3</button>
+          <button data-key="4">4</button><button data-key="5">5</button><button data-key="6">6</button>
+          <button data-key="7">7</button><button data-key="8">8</button><button data-key="9">9</button>
+          <button data-key="clear" class="secondary">Clear</button>
+          <button data-key="0">0</button>
+          <button data-key="back" class="secondary">⌫</button>
+        </div>
+      </div>
+
+      <div style="margin-top:24px"><button id="btn-finalize">Finish setup</button></div>
+    </section>
+
+    <section class="step card" data-step="4">
+      <h2>All set</h2>
+      <p>Setup complete. This kiosk will reboot in a moment and start showing Legacy Wall automatically.</p>
+    </section>
+
+    <div id="toast" class="toast"></div>
+  </div>
+
+  <script src="/static/firstboot.js"></script>
+</body>
+</html>

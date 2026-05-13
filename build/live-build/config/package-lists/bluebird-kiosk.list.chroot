@@ -1,0 +1,67 @@
+# Packages installed into the BlueBird Kiosk OS image.
+# Keep this list short — every package is attack surface.
+
+# Base
+linux-image-amd64
+firmware-linux
+firmware-iwlwifi
+firmware-realtek
+firmware-misc-nonfree
+
+# Boot
+grub-efi-amd64
+grub-pc
+
+# Display stack: Wayland + sway compositor
+sway
+swayidle
+swaylock
+seatd
+xwayland
+mesa-vulkan-drivers
+libgl1-mesa-dri
+
+# Greeter / login: minimal, autologin to the kiosk user
+greetd
+
+# Browser
+chromium
+
+# Networking
+network-manager
+network-manager-gnome
+wpasupplicant
+iw
+dnsutils
+iputils-ping
+
+# Display utilities
+brightnessctl
+wlr-randr
+
+# Input
+libinput-tools
+python3-evdev
+
+# Python runtime for the bluebird-kiosk app
+python3
+python3-pip
+python3-venv
+python3-fastapi
+python3-uvicorn
+python3-jinja2
+python3-pydantic
+python3-bcrypt
+python3-pyqrcode
+python3-requests
+
+# Calamares installer
+calamares
+calamares-settings-debian
+
+# Utilities
+sudo
+systemd
+systemd-timesyncd
+unattended-upgrades
+ca-certificates
