@@ -14,7 +14,7 @@ Legacy Wall kiosk.
 
 ## Step 1 — Create the installer USB
 
-1. Download `bluebird-kiosk-x86_64.iso` from
+1. Download `bluebird-kiosk-os.iso` from
    `https://bluebird-alerts.com/downloads/kiosk-os/latest`.
 2. Verify the SHA-256 checksum listed on that page matches the file you
    downloaded.

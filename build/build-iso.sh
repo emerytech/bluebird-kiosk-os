@@ -7,7 +7,7 @@
 # mknod). So we copy the source tree into the container's local filesystem,
 # build there, and copy the finished ISO back out.
 #
-# Output:  dist/bluebird-kiosk-x86_64.iso
+# Output:  dist/bluebird-kiosk-os.iso
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -64,7 +64,7 @@ lb config \
   --bootappend-live "boot=live components quiet splash" \
   --debian-installer false \
   --distribution bookworm \
-  --image-name "bluebird-kiosk-x86_64" \
+  --image-name "bluebird-kiosk-os" \
   --iso-application "BlueBird Kiosk OS Installer" \
   --iso-volume "BLUEBIRD-KIOSK" \
   --apt-indices false \

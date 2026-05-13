@@ -41,7 +41,7 @@ cd kiosk-os/build
 sudo IN_BUILDER=1 ./build-iso.sh
 ```
 
-Output: `kiosk-os/build/dist/bluebird-kiosk-x86_64.iso`. First build ~25 min,
+Output: `kiosk-os/build/dist/bluebird-kiosk-os.iso`. First build ~25 min,
 subsequent builds faster because live-build caches the bootstrap.
 
 ## Test in QEMU
@@ -51,7 +51,7 @@ cd kiosk-os/build/dist
 qemu-img create -f qcow2 test.qcow2 16G
 qemu-system-x86_64 \
   -m 4G -enable-kvm \
-  -cdrom bluebird-kiosk-x86_64.iso \
+  -cdrom bluebird-kiosk-os.iso \
   -drive file=test.qcow2,if=virtio \
   -netdev user,id=net0 -device virtio-net,netdev=net0 \
   -display sdl
