@@ -192,9 +192,17 @@ fi
 
 log "configuring greetd (autologin → sway → kiosk)"
 install -d /etc/greetd
+# `initial_session` runs immediately on boot without showing a login prompt.
+# `default_session` is required by greetd's config schema; we use the same
+# command + user so that if sway ever exits, greetd respawns it directly
+# rather than dropping to a greeter we don't ship.
 cat >/etc/greetd/config.toml <<'EOF'
 [terminal]
 vt = 1
+
+[initial_session]
+command = "sway --config /etc/sway/config"
+user = "bluebird-kiosk"
 
 [default_session]
 command = "sway --config /etc/sway/config"

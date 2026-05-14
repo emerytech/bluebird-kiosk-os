@@ -45,6 +45,10 @@ cat >/etc/greetd/config.toml <<'EOF'
 [terminal]
 vt = 1
 
+[initial_session]
+command = "sway --config /etc/sway/config"
+user = "bluebird-kiosk"
+
 [default_session]
 command = "sway --config /etc/sway/config"
 user = "bluebird-kiosk"
