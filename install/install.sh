@@ -190,6 +190,28 @@ if [[ ! -f /etc/bluebird/kiosk.conf ]]; then
     "$LIVE_BUILD_INC/etc/bluebird/kiosk.conf.example" /etc/bluebird/kiosk.conf
 fi
 
+log "handing all network interfaces to NetworkManager"
+# Debian's installer sets up Ethernet via /etc/network/interfaces (ifupdown).
+# NetworkManager respects that and marks the iface as "unmanaged", which
+# breaks our firstboot wizard's Ethernet detection and prevents WiFi
+# changes via the admin overlay. Take everything back over.
+if [[ -f /etc/network/interfaces ]]; then
+  if grep -qE '^\s*(auto|iface|allow-hotplug)\s+(eth|eno|enp|wlp|wlx|wls)' /etc/network/interfaces; then
+    log "  rewriting /etc/network/interfaces to loopback-only"
+    cp /etc/network/interfaces /etc/network/interfaces.pre-bluebird
+    cat >/etc/network/interfaces <<'EOF'
+# Managed by NetworkManager — see /etc/NetworkManager/conf.d/
+auto lo
+iface lo inet loopback
+EOF
+  fi
+fi
+install -d /etc/NetworkManager/conf.d
+cat >/etc/NetworkManager/conf.d/10-globally-managed.conf <<'EOF'
+[keyfile]
+unmanaged-devices=none
+EOF
+
 log "configuring greetd (autologin → sway → kiosk)"
 install -d /etc/greetd
 # `initial_session` runs immediately on boot without showing a login prompt.
