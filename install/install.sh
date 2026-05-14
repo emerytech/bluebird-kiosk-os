@@ -183,6 +183,12 @@ install -m 0755 "$LIVE_BUILD_INC"/opt/bluebird-kiosk/bin/* /opt/bluebird-kiosk/b
 log "installing polkit rules"
 install -d /etc/polkit-1/rules.d
 install -m 0644 "$LIVE_BUILD_INC/etc/polkit-1/rules.d/49-bluebird-kiosk.rules" /etc/polkit-1/rules.d/
+# polkit doesn't automatically pick up new rules from a running daemon, so the
+# first reboot would get "Access denied" from systemctl reboot. Restart it now.
+# Unit name varies (polkit.service vs polkitd.service); try both.
+systemctl restart polkit.service 2>/dev/null \
+  || systemctl restart polkitd.service 2>/dev/null \
+  || true
 
 log "installing default kiosk.conf (only if missing)"
 if [[ ! -f /etc/bluebird/kiosk.conf ]]; then
