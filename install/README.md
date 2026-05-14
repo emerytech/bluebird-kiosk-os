@@ -1,7 +1,7 @@
 # BlueBird Kiosk Installer
 
-Convert a fresh Debian 12 (or Ubuntu 24.04) install into a BlueBird Legacy
-Wall kiosk. This is the **recommended v1 deployment path** — simpler, more
+Convert a fresh Debian 12 / Debian 13 / Ubuntu 24.04 install into a BlueBird
+Legacy Wall kiosk. This is the **recommended v1 deployment path** — simpler, more
 reliable, and faster to iterate than the custom ISO build under
 `kiosk-os/build/`.
 
@@ -13,8 +13,8 @@ proves out at scale.
 - An x86_64 PC (mini-PC, NUC, repurposed laptop — anything Debian boots on).
 - A working internet connection (script downloads ~700 MB of apt packages
   the first time).
-- Debian 12 "bookworm" or Ubuntu 24.04 LTS, freshly installed, command-line
-  only (no desktop environment).
+- Debian 12 "bookworm", Debian 13 "trixie", or Ubuntu 24.04 LTS, freshly
+  installed, command-line only (no desktop environment).
 - An admin user with sudo.
 
 ## Install — quick path

@@ -55,12 +55,12 @@ die()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
 
 # Distro check.
 if ! grep -qE 'ID=(debian|ubuntu)' /etc/os-release; then
-  die "this script only supports Debian 12 / Ubuntu 24.04 — refusing to run on $(grep ^PRETTY_NAME /etc/os-release)"
+  die "this script only supports Debian 12+ / Ubuntu 24.04+ — refusing to run on $(grep ^PRETTY_NAME /etc/os-release)"
 fi
 . /etc/os-release
 case "${VERSION_ID:-}" in
-  12|24.04) ;;
-  *) warn "running on ${ID} ${VERSION_ID:-unknown} (only 12 / 24.04 are tested) — proceeding anyway" ;;
+  12|13|24.04) ;;
+  *) warn "running on ${ID} ${VERSION_ID:-unknown} (tested on Debian 12 / 13 + Ubuntu 24.04) — proceeding anyway" ;;
 esac
 
 log "kiosk install starting (repo: $REPO_ROOT, debug=$DEBUG, firstboot=$((1 - SKIP_FIRSTBOOT)))"
@@ -68,13 +68,32 @@ log "kiosk install starting (repo: $REPO_ROOT, debug=$DEBUG, firstboot=$((1 - SK
 # ── apt packages ─────────────────────────────────────────────────────────────
 log "installing apt packages (this is the slow step)"
 
-# Ensure non-free-firmware is enabled (Intel/Realtek firmware lives there)
-if ! grep -q 'non-free-firmware' /etc/apt/sources.list 2>/dev/null; then
-  log "  enabling non-free-firmware in sources.list"
-  sed -i 's|^\(deb .*\(main\|main contrib\)\)$|\1 non-free non-free-firmware|' /etc/apt/sources.list || true
-fi
+# Ensure non-free-firmware is enabled (Intel/Realtek firmware lives there).
+# Debian 12 uses /etc/apt/sources.list (one-line format). Debian 13 defaults to
+# /etc/apt/sources.list.d/debian.sources (deb822 format). Handle both.
+enable_non_free_firmware() {
+  local changed=0
+  if [[ -f /etc/apt/sources.list ]] && grep -q '^deb ' /etc/apt/sources.list; then
+    if ! grep -q 'non-free-firmware' /etc/apt/sources.list; then
+      log "  enabling non-free + non-free-firmware in /etc/apt/sources.list"
+      sed -i.bak -E 's|^(deb .*\<main\>.*)$|\1 contrib non-free non-free-firmware|' /etc/apt/sources.list
+      changed=1
+    fi
+  fi
+  if [[ -f /etc/apt/sources.list.d/debian.sources ]]; then
+    if ! grep -q 'non-free-firmware' /etc/apt/sources.list.d/debian.sources; then
+      log "  enabling non-free + non-free-firmware in /etc/apt/sources.list.d/debian.sources"
+      sed -i.bak -E 's|^(Components:.*)$|\1 contrib non-free non-free-firmware|' /etc/apt/sources.list.d/debian.sources
+      changed=1
+    fi
+  fi
+  if [[ $changed -eq 1 ]]; then
+    apt-get update -qq
+  fi
+}
 
 DEBIAN_FRONTEND=noninteractive apt-get update -qq
+enable_non_free_firmware
 
 # Mirror of kiosk-os/build/live-build/config/package-lists/bluebird-kiosk.list.chroot,
 # minus things only relevant inside a live ISO build (debian-installer, etc.)
