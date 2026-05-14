@@ -18,15 +18,23 @@ import time
 from pathlib import Path
 from typing import Dict, Optional
 
+import os
 import requests
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
 from . import __version__, config
 from .services import display, nmcli_wrapper, pin, system
+from .services.local_cache import KioskLocalCache
+from .services.renderer import collect_slideshow_media, resolve_media_file_path
+
+
+LOCAL_CACHE_DB = os.environ.get(
+    "BLUEBIRD_LOCAL_CACHE_DB", "/var/lib/bluebird-kiosk/cache.db"
+)
 
 
 # ── Pydantic request bodies ───────────────────────────────────────────────────
@@ -126,6 +134,7 @@ def create_app() -> FastAPI:
         openapi_url=None,
     )
     app.state.admin_sessions = {}
+    app.state.local_cache = KioskLocalCache(LOCAL_CACHE_DB)
     app.mount(
         "/static",
         StaticFiles(directory=str(HERE / "web" / "static")),
@@ -265,6 +274,41 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc))
         config.mark_configured()
         return JSONResponse({"ok": True})
+
+    # ── Local Legacy Wall renderer ───────────────────────────────────────────
+    # v0: reads from KioskLocalCache (synced by bluebird-kiosk-sync.service)
+    # and serves a minimal fullscreen slideshow. Chromium is pointed here in
+    # offline-first mode so the kiosk keeps showing content even when the
+    # network is down.
+
+    @app.get("/legacy-wall", response_class=HTMLResponse)
+    async def legacy_wall_home(request: Request):
+        cfg = config.read_config()
+        return templates.TemplateResponse(
+            "legacy_wall.html",
+            {
+                "request": request,
+                "tenant_name": cfg.get("TENANT_NAME") or cfg.get("SCHOOL_SLUG") or "",
+                "version": __version__,
+            },
+        )
+
+    @app.get("/legacy-wall/api/media")
+    async def legacy_wall_api_media(request: Request):
+        cache: KioskLocalCache = request.app.state.local_cache
+        media = collect_slideshow_media(cache)
+        return JSONResponse({"media": media, "count": len(media)})
+
+    @app.get("/legacy-wall/media/{media_id}")
+    async def legacy_wall_media_blob(request: Request, media_id: int):
+        cache: KioskLocalCache = request.app.state.local_cache
+        file_path = resolve_media_file_path(cache, int(media_id))
+        if not file_path or not os.path.isfile(file_path):
+            raise HTTPException(status_code=404, detail="media_not_cached")
+        return FileResponse(
+            path=file_path,
+            headers={"Cache-Control": "private, max-age=86400"},
+        )
 
     # ── Admin overlay (PIN-gated) ────────────────────────────────────────────
 

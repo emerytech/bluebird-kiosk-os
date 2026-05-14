@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ tenant_name or "Legacy Wall" }}</title>
+  <link rel="stylesheet" href="/static/legacy_wall.css">
+</head>
+<body class="lw-body">
+  <div id="lw-stage" class="lw-stage">
+    <div class="lw-header">
+      <div class="lw-brand">
+        <div class="lw-dot"></div>
+        <span class="lw-school">{{ tenant_name or "Legacy Wall" }}</span>
+      </div>
+      <div class="lw-status" id="lw-status"></div>
+    </div>
+
+    <div class="lw-slot" id="lw-slot">
+      <!-- Slides are injected here. Two layers cross-fade. -->
+      <img class="lw-img lw-layer-a" id="lw-img-a" alt="">
+      <img class="lw-img lw-layer-b" id="lw-img-b" alt="">
+      <div class="lw-empty" id="lw-empty">
+        <h1>Waiting for content</h1>
+        <p>The kiosk has not yet downloaded any photos. They will appear here as soon as the sync completes.</p>
+      </div>
+    </div>
+
+    <div class="lw-caption" id="lw-caption"></div>
+    <div class="lw-footer">
+      <div class="lw-count" id="lw-count"></div>
+      <div class="lw-version">BlueBird Kiosk OS · v{{ version }}</div>
+    </div>
+  </div>
+
+  <script src="/static/legacy_wall.js"></script>
+</body>
+</html>

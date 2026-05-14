@@ -1,0 +1,123 @@
+/* Local Legacy Wall slideshow — v0 of the on-device renderer.
+ *
+ * Visual language matches the cloud Legacy Wall: dark background, large
+ * crisp imagery, restrained header chrome that fades when a slide is
+ * showing. Two image layers cross-fade so we never flash black between
+ * slides.
+ */
+
+:root {
+  --bb-bg: #0b1320;
+  --bb-bg-soft: #0f1a2b;
+  --bb-text: #f1f5f9;
+  --bb-text-dim: #94a3b8;
+  --bb-blue: #2563eb;
+  --bb-blue-light: #60a5fa;
+  --bb-gold: #f59e0b;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, .lw-body {
+  height: 100%;
+  width: 100%;
+  background: var(--bb-bg);
+  color: var(--bb-text);
+  font-family: -apple-system, "Inter", "Segoe UI", system-ui, sans-serif;
+  overflow: hidden;
+  cursor: none;
+}
+
+.lw-stage {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  grid-template-rows: auto 1fr auto auto;
+}
+
+/* ── Header ──────────────────────────────────────────────────────────────── */
+
+.lw-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 24px 36px;
+  background: linear-gradient(to bottom, rgba(0,0,0,0.45), rgba(0,0,0,0));
+  z-index: 2;
+}
+.lw-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.lw-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--bb-blue-light);
+  box-shadow: 0 0 12px var(--bb-blue-light);
+}
+.lw-status {
+  font-size: 14px;
+  color: var(--bb-text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.lw-status.warn { color: var(--bb-gold); }
+
+/* ── Image stage ─────────────────────────────────────────────────────────── */
+
+.lw-slot {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: var(--bb-bg);
+  overflow: hidden;
+}
+.lw-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  opacity: 0;
+  transition: opacity 1.2s ease-in-out;
+}
+.lw-img.is-visible { opacity: 1; }
+
+.lw-empty {
+  position: absolute;
+  inset: 0;
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  gap: 16px;
+  color: var(--bb-text-dim);
+  padding: 0 64px;
+}
+.lw-empty.is-visible { display: flex; }
+.lw-empty h1 { font-size: 36px; color: var(--bb-text); font-weight: 600; }
+.lw-empty p { font-size: 18px; max-width: 640px; line-height: 1.6; }
+
+/* ── Caption + footer ────────────────────────────────────────────────────── */
+
+.lw-caption {
+  padding: 16px 36px 4px;
+  font-size: 22px;
+  font-weight: 500;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+  min-height: 32px;
+}
+.lw-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 36px 24px;
+  font-size: 13px;
+  color: var(--bb-text-dim);
+  font-variant-numeric: tabular-nums;
+}

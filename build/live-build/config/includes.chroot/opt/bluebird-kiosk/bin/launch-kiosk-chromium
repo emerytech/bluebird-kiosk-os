@@ -1,17 +1,37 @@
 #!/usr/bin/env bash
-# Launch Chromium pointed at the configured Legacy Wall URL, or a loading
-# splash if the device hasn't been configured yet.
+# Launch Chromium pointed at the local Legacy Wall renderer.
+#
+# Phase 3 of the kiosk-v2 local-cache effort: instead of pointing at the
+# cloud URL (which fails when the kiosk's internet is down), we point at
+# the on-device control plane at 127.0.0.1:7311/legacy-wall. That page
+# reads from KioskLocalCache, which the sync service keeps current.
+#
+# Override path:
+#   KIOSK_URL=https://bluebird-alerts.com/foo/legacy-wall launch-kiosk-chromium
+# falls back to the cloud URL if someone explicitly asks for it.
 set -eu
 
 CONF=/etc/bluebird/kiosk.conf
-URL="file:///opt/bluebird-kiosk/share/loading.html"
+ADMIN_PORT=7311
+URL="http://127.0.0.1:${ADMIN_PORT}/legacy-wall"
 
 if [[ -f "$CONF" ]]; then
   # shellcheck disable=SC1091
   source "$CONF"
-  if [[ -n "${LEGACY_WALL_URL:-}" ]]; then
-    URL="$LEGACY_WALL_URL"
+  if [[ -n "${ADMIN_PORT:-}" ]]; then
+    URL="http://127.0.0.1:${ADMIN_PORT}/legacy-wall"
   fi
+fi
+
+# Pre-configuration: if the firstboot wizard hasn't completed yet, the
+# /legacy-wall route still works but shows the "Waiting for content" state.
+# A friendlier path is to send Chromium to the wizard surface directly. But
+# the gesture/launcher logic already handles that — this script only runs
+# in post-configured mode.
+
+# Allow an explicit env override (e.g. for cloud fallback testing).
+if [[ -n "${KIOSK_URL:-}" ]]; then
+  URL="$KIOSK_URL"
 fi
 
 exec /usr/bin/chromium \
