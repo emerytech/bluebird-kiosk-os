@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Pick the right Chromium launcher based on first-boot state.
+#
+# Called from /etc/sway/config.d/bluebird-locked.conf as the only `exec` line.
+# Runs inside the sway Wayland session, so Chromium has a display to attach to.
+set -eu
+
+CONF=/etc/bluebird/configured
+
+if [[ -f "$CONF" ]]; then
+    exec /opt/bluebird-kiosk/bin/launch-kiosk-chromium
+else
+    exec /opt/bluebird-kiosk/bin/bluebird-firstboot
+fi

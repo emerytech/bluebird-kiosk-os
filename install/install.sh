@@ -196,12 +196,14 @@ systemctl enable NetworkManager.service
 systemctl unmask greetd.service 2>/dev/null || true
 systemctl enable greetd.service
 systemctl enable bluebird-admin.service
-[[ "$SKIP_FIRSTBOOT" -eq 0 ]] && systemctl enable bluebird-firstboot.service
-systemctl enable bluebird-kiosk.service
 systemctl enable bluebird-gesture.service
 systemctl enable bluebird-heartbeat.service
 systemctl enable unattended-upgrades.service
 systemctl set-default bluebird-kiosk.target
+# bluebird-kiosk.service and bluebird-firstboot.service are NOT enabled.
+#   - sway is launched by greetd's session command, not by a standalone unit
+#   - the firstboot wizard is picked by sway's launch-bluebird-session dispatcher
+#     based on whether /etc/bluebird/configured exists
 
 # ── Harden (skipped under --debug) ───────────────────────────────────────────
 if [[ "$DEBUG" -eq 0 ]]; then
