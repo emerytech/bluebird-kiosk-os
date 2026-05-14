@@ -126,6 +126,9 @@ code {
   min-height: 1.2em;
 }
 .step .muted { color: var(--bb-muted); }
+.status-ok    { color: var(--bb-success); font-weight: 600; }
+.status-warn  { color: var(--bb-warn);    font-weight: 600; }
+.status-error { color: var(--bb-danger);  font-weight: 600; }
 
 .step-footer {
   display: flex;

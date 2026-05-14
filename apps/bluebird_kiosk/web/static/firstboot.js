@@ -40,32 +40,61 @@ async function loadNetwork() {
   const list = document.getElementById('wifi-list');
   const summary = document.getElementById('net-summary');
   list.innerHTML = '<div class="muted">Scanning…</div>';
-  summary.textContent = 'Checking network status…';
+  summary.innerHTML = '<span class="muted">Checking network status…</span>';
 
   let r;
   try {
     r = await fetch('/firstboot/wifi/scan').then((r) => r.json());
   } catch (e) {
-    summary.textContent = 'Network scan failed.';
+    summary.innerHTML = '<span class="status-error">Network scan failed.</span>';
     list.innerHTML = '';
     return;
   }
 
   const status = r.status || {};
-  if (status.ethernet) {
-    summary.innerHTML = `Connected via Ethernet — <strong>${escapeHTML(status.ethernet)}</strong>. You can continue, or join a WiFi network below if you'd prefer wireless.`;
-  } else if (status.wifi) {
-    summary.innerHTML = `Connected to WiFi — <strong>${escapeHTML(status.wifi)}</strong>. You're online. Click Continue.`;
-  } else {
-    summary.textContent = 'No active network. Pick a WiFi network below, or plug in an Ethernet cable.';
-  }
+  const networks = Array.isArray(r.networks) ? r.networks : [];
 
-  list.innerHTML = '';
-  if (!r.networks || !r.networks.length) {
-    list.innerHTML = '<div class="muted">No WiFi networks visible.</div>';
+  // Case 1: Ethernet/LAN is connected — the dominant message is "you're online".
+  // Don't lead with WiFi clutter; only offer it as an optional toggle.
+  if (status.ethernet) {
+    summary.innerHTML = `
+      <span class="status-ok">✓ Connected to LAN</span>
+      <span class="muted"> via Ethernet (${escapeHTML(status.ethernet)})</span>
+    `;
+    if (networks.length) {
+      list.innerHTML = `<button id="net-show-wifi" class="ghost">Use WiFi instead (${networks.length} network${networks.length === 1 ? '' : 's'} nearby)</button>`;
+      document.getElementById('net-show-wifi').addEventListener('click', () => {
+        renderWifiList(list, networks);
+      });
+    } else {
+      list.innerHTML = '';
+    }
     return;
   }
-  for (const n of r.networks) {
+
+  // Case 2: Already on WiFi.
+  if (status.wifi) {
+    summary.innerHTML = `
+      <span class="status-ok">✓ Connected to WiFi</span>
+      <span class="muted"> — ${escapeHTML(status.wifi)}</span>
+    `;
+    renderWifiList(list, networks);
+    return;
+  }
+
+  // Case 3: Not connected to anything.
+  if (!networks.length) {
+    summary.innerHTML = '<span class="status-warn">Not connected.</span> <span class="muted">Plug in an Ethernet cable, or check that this device has a working WiFi adapter.</span>';
+    list.innerHTML = '';
+    return;
+  }
+  summary.innerHTML = '<span class="status-warn">Not connected.</span> <span class="muted">Pick a WiFi network below, or plug in an Ethernet cable.</span>';
+  renderWifiList(list, networks);
+}
+
+function renderWifiList(list, networks) {
+  list.innerHTML = '';
+  for (const n of networks) {
     const row = document.createElement('div');
     row.className = 'wifi-row';
     row.innerHTML = `
