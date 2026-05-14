@@ -1,6 +1,14 @@
 #!/bin/bash
-# Hook: install the bluebird-kiosk Python package, create the kiosk user,
-# and apply system hardening to the chroot during ISO build.
+# Hook: install BlueBird Kiosk bits into the chroot.
+#
+# IMPORTANT design split:
+# - This hook bakes everything into the live system but does NOT make the
+#   kiosk target the default and does NOT enable the kiosk runtime services.
+# - The kiosk activation (set-default + service enables + VT lockdown) is
+#   deferred to a Calamares post-install step that runs ONLY when installing
+#   to disk. See /usr/local/sbin/bluebird-kiosk-activate.
+# - The live ISO boots as a vanilla Debian Live: getty on tty1, autologin
+#   to `user`, ready to launch Calamares.
 set -eu
 
 echo "==> bluebird-kiosk: create system group + user (UID/GID 1000)"
@@ -24,15 +32,25 @@ if [[ ! -f /etc/bluebird/kiosk.conf ]]; then
 fi
 
 echo "==> bluebird-kiosk: install python apps"
-# The apps/ tree is rsynced into the chroot by 0005-copy-apps.hook.chroot earlier.
 if [[ -d /opt/bluebird-kiosk/src ]]; then
     pip3 install --break-system-packages --no-cache-dir /opt/bluebird-kiosk/src/bluebird_kiosk
     pip3 install --break-system-packages --no-cache-dir /opt/bluebird-kiosk/src/bluebird_gesture
 fi
 
-echo "==> bluebird-kiosk: harden logind (no VT switching)"
-mkdir -p /etc/systemd/logind.conf.d
-cat >/etc/systemd/logind.conf.d/bluebird-kiosk.conf <<'EOF'
+echo "==> bluebird-kiosk: pre-stage greetd config (only effective when activate.sh runs)"
+mkdir -p /etc/greetd
+cat >/etc/greetd/config.toml <<'EOF'
+[terminal]
+vt = 1
+
+[default_session]
+command = "sway --config /etc/sway/config"
+user = "bluebird-kiosk"
+EOF
+
+echo "==> bluebird-kiosk: pre-stage logind override (only effective when activate.sh runs)"
+mkdir -p /etc/systemd/logind.conf.d.disabled
+cat >/etc/systemd/logind.conf.d.disabled/bluebird-kiosk.conf <<'EOF'
 [Login]
 NAutoVTs=0
 ReserveVT=0
@@ -43,32 +61,7 @@ HandleLidSwitch=ignore
 KillUserProcesses=no
 EOF
 
-echo "==> bluebird-kiosk: configure greetd for autologin to sway"
-mkdir -p /etc/greetd
-cat >/etc/greetd/config.toml <<'EOF'
-[terminal]
-vt = 1
-
-[default_session]
-command = "agreety --cmd /bin/sh -c 'systemctl start bluebird-kiosk.target && sleep infinity'"
-user = "greeter"
-
-[initial_session]
-command = "systemctl --user start sway"
-user = "bluebird-kiosk"
-EOF
-
-echo "==> bluebird-kiosk: enable services"
-systemctl enable NetworkManager.service
-systemctl enable bluebird-admin.service
-systemctl enable bluebird-firstboot.service
-systemctl enable bluebird-kiosk.service
-systemctl enable bluebird-gesture.service
-systemctl enable bluebird-heartbeat.service
-systemctl enable unattended-upgrades.service
-systemctl set-default bluebird-kiosk.target
-
-echo "==> bluebird-kiosk: configure unattended-upgrades (security pocket only)"
+echo "==> bluebird-kiosk: pre-stage unattended-upgrades config"
 cat >/etc/apt/apt.conf.d/52bluebird-unattended <<'EOF'
 Unattended-Upgrade::Origins-Pattern {
     "origin=Debian,codename=${distro_codename},label=Debian-Security";
@@ -79,10 +72,45 @@ APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
 EOF
 
-echo "==> bluebird-kiosk: disable consoles, ssh, root login"
+echo "==> bluebird-kiosk: install activation script (run by Calamares post-install)"
+cat >/usr/local/sbin/bluebird-kiosk-activate <<'EOF'
+#!/bin/bash
+# Activate kiosk mode on this installed system. Idempotent.
+# Calamares calls this as a `shellprocess` after the rootfs is copied + chrooted.
+set -eu
+
+echo "==> kiosk-activate: enable logind hardening"
+install -d /etc/systemd/logind.conf.d
+mv -f /etc/systemd/logind.conf.d.disabled/bluebird-kiosk.conf \
+      /etc/systemd/logind.conf.d/bluebird-kiosk.conf 2>/dev/null || true
+rmdir /etc/systemd/logind.conf.d.disabled 2>/dev/null || true
+
+echo "==> kiosk-activate: enable kiosk services"
+systemctl enable NetworkManager.service
+systemctl enable greetd.service
+systemctl enable bluebird-admin.service
+systemctl enable bluebird-firstboot.service
+systemctl enable bluebird-kiosk.service
+systemctl enable bluebird-gesture.service
+systemctl enable bluebird-heartbeat.service
+systemctl enable unattended-upgrades.service
+
+echo "==> kiosk-activate: disable extra TTYs and root login"
 systemctl mask getty@tty2.service getty@tty3.service getty@tty4.service \
-    getty@tty5.service getty@tty6.service || true
+    getty@tty5.service getty@tty6.service
 systemctl disable ssh.service 2>/dev/null || true
 passwd -l root || true
 
-echo "==> bluebird-kiosk: hook complete"
+echo "==> kiosk-activate: set kiosk target as system default"
+systemctl set-default bluebird-kiosk.target
+
+echo "==> kiosk-activate: done"
+EOF
+chmod +x /usr/local/sbin/bluebird-kiosk-activate
+
+echo "==> bluebird-kiosk: ensure live system has a working getty on tty1"
+# Live-config provides autologin to `user`; we keep that default and let live
+# users launch Calamares manually (Calamares writes its launcher to /usr/share/applications)
+# or via the GRUB "Install" entry in a future iteration.
+
+echo "==> bluebird-kiosk: chroot hook complete (kiosk NOT activated; live boots as Debian Live)"
