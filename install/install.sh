@@ -125,6 +125,14 @@ APT_PACKAGES=(
   # Firmware for common WiFi/eth chips
   firmware-linux firmware-iwlwifi firmware-realtek firmware-misc-nonfree
 
+  # Authorization daemon — required for the kiosk user to call
+  # `systemctl reboot/poweroff` and NetworkManager actions without a password.
+  # On Debian 13 polkit is NOT pulled in as a dependency of NetworkManager
+  # or systemd-logind with --no-install-recommends, so we have to ask for it
+  # explicitly. Without it, the firstboot wizard's "Finish Setup → reboot"
+  # silently fails with "Call to Reboot failed: Access denied".
+  polkitd
+
   # Maintenance
   sudo systemd systemd-timesyncd unattended-upgrades ca-certificates
 
