@@ -6,83 +6,134 @@
   <title>BlueBird Kiosk OS — Setup</title>
   <link rel="stylesheet" href="/static/kiosk.css">
 </head>
-<body>
-  <div class="shell">
-    <header class="brand">
-      <div class="dot"></div>
-      <div>
-        <h1>BlueBird Kiosk OS</h1>
-        <small>First-time setup</small>
+<body class="wizard-body">
+  <div class="wizard">
+    <header class="wizard-header">
+      <div class="brand-mark">
+        <div class="dot"></div>
+        <span>BlueBird Kiosk OS</span>
+      </div>
+      <div class="progress">
+        <span class="dot-step" data-progress-step="1"></span>
+        <span class="dot-step" data-progress-step="2"></span>
+        <span class="dot-step" data-progress-step="3"></span>
+        <span class="dot-step" data-progress-step="4"></span>
       </div>
     </header>
 
-    <section class="step active card" data-step="0">
-      <h2>Welcome</h2>
-      <p>This wizard will connect the kiosk to your network, link it to your school, and set an admin PIN. It takes about two minutes.</p>
-      <button id="btn-start">Begin</button>
-    </section>
+    <main class="wizard-main">
 
-    <section class="step card" data-step="1">
-      <h2>Network</h2>
-      <p>Choose a WiFi network, or skip if you've already plugged in an Ethernet cable.</p>
-      <div class="wifi-list" id="wifi-list">Scanning…</div>
-      <div style="margin-top:16px">
-        <button class="secondary" id="wifi-skip" style="display:none">Skip — use Ethernet</button>
-      </div>
-    </section>
-
-    <section class="step card" data-step="2">
-      <h2>School identity</h2>
-      <p>Enter your BlueBird school slug. This is the short identifier in your school's URL, e.g. <code>nen</code> in <code>bluebird-alerts.com/nen/legacy-wall</code>.</p>
-      <input id="slug-input" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="school-slug">
-      <div style="margin-top:16px"><button id="btn-slug">Continue</button></div>
-    </section>
-
-    <section class="step card" data-step="3">
-      <h2>Admin PIN</h2>
-      <p>Set a 6-digit PIN for the device-admin overlay. Used by on-site staff to fix WiFi or display issues. Different from the in-app kiosk PIN.</p>
-
-      <div>
-        <label>Enter PIN</label>
-        <div class="pin-display" id="pin-1-dots">
-          <span class="pin-dot"></span><span class="pin-dot"></span><span class="pin-dot"></span>
-          <span class="pin-dot"></span><span class="pin-dot"></span><span class="pin-dot"></span>
+      <!-- Step 0: Welcome -->
+      <section class="step active" data-step="0">
+        <div class="step-inner">
+          <h1>Welcome</h1>
+          <p class="lead">
+            This wizard sets up the kiosk in four steps: network, school identity,
+            and an admin PIN. It takes about two minutes.
+          </p>
+          <footer class="step-footer">
+            <button id="btn-start" class="primary">Begin Setup</button>
+          </footer>
         </div>
-        <input id="pin-1" type="hidden" value="">
-        <div class="numpad" data-numpad="pin-1">
-          <button data-key="1">1</button><button data-key="2">2</button><button data-key="3">3</button>
-          <button data-key="4">4</button><button data-key="5">5</button><button data-key="6">6</button>
-          <button data-key="7">7</button><button data-key="8">8</button><button data-key="9">9</button>
-          <button data-key="clear" class="secondary">Clear</button>
-          <button data-key="0">0</button>
-          <button data-key="back" class="secondary">⌫</button>
-        </div>
-      </div>
+      </section>
 
-      <div style="margin-top:24px">
-        <label>Confirm PIN</label>
-        <div class="pin-display" id="pin-2-dots">
-          <span class="pin-dot"></span><span class="pin-dot"></span><span class="pin-dot"></span>
-          <span class="pin-dot"></span><span class="pin-dot"></span><span class="pin-dot"></span>
+      <!-- Step 1: Network -->
+      <section class="step" data-step="1">
+        <div class="step-inner">
+          <div class="step-meta">Step 1 of 4</div>
+          <h1>Network</h1>
+          <p class="lead" id="net-summary">Checking network status…</p>
+          <div class="wifi-list" id="wifi-list">Scanning…</div>
+          <footer class="step-footer">
+            <button id="btn-network-continue" class="primary">Continue →</button>
+          </footer>
         </div>
-        <input id="pin-2" type="hidden" value="">
-        <div class="numpad" data-numpad="pin-2">
-          <button data-key="1">1</button><button data-key="2">2</button><button data-key="3">3</button>
-          <button data-key="4">4</button><button data-key="5">5</button><button data-key="6">6</button>
-          <button data-key="7">7</button><button data-key="8">8</button><button data-key="9">9</button>
-          <button data-key="clear" class="secondary">Clear</button>
-          <button data-key="0">0</button>
-          <button data-key="back" class="secondary">⌫</button>
+      </section>
+
+      <!-- Step 2: School identity -->
+      <section class="step" data-step="2">
+        <div class="step-inner">
+          <div class="step-meta">Step 2 of 4</div>
+          <h1>School Identity</h1>
+          <p class="lead">
+            Enter your BlueBird school slug. It's the short identifier in your
+            school's URL — for example <code>nen</code> in
+            <code>bluebird-alerts.com/nen/legacy-wall</code>.
+          </p>
+          <input id="slug-input" class="big-input" type="text"
+                 autocomplete="off" autocapitalize="off" spellcheck="false"
+                 placeholder="school-slug">
+          <p class="hint" id="slug-hint"></p>
+          <footer class="step-footer">
+            <button id="btn-slug-back" class="ghost">← Back</button>
+            <button id="btn-slug" class="primary">Continue →</button>
+          </footer>
         </div>
-      </div>
+      </section>
 
-      <div style="margin-top:24px"><button id="btn-finalize">Finish setup</button></div>
-    </section>
+      <!-- Step 3: Admin PIN -->
+      <section class="step" data-step="3">
+        <div class="step-inner">
+          <div class="step-meta">Step 3 of 4</div>
+          <h1>Admin PIN</h1>
+          <p class="lead">
+            Set a 6-digit PIN for on-site staff to access the device-admin
+            overlay (WiFi, display, system tools). Different from in-app PINs.
+          </p>
 
-    <section class="step card" data-step="4">
-      <h2>All set</h2>
-      <p>Setup complete. This kiosk will reboot in a moment and start showing Legacy Wall automatically.</p>
-    </section>
+          <div class="pin-group">
+            <label>Enter PIN</label>
+            <div class="pin-display" id="pin-1-dots">
+              <span class="pin-dot"></span><span class="pin-dot"></span><span class="pin-dot"></span>
+              <span class="pin-dot"></span><span class="pin-dot"></span><span class="pin-dot"></span>
+            </div>
+            <input id="pin-1" type="hidden" value="">
+            <div class="numpad" data-numpad="pin-1">
+              <button data-key="1">1</button><button data-key="2">2</button><button data-key="3">3</button>
+              <button data-key="4">4</button><button data-key="5">5</button><button data-key="6">6</button>
+              <button data-key="7">7</button><button data-key="8">8</button><button data-key="9">9</button>
+              <button data-key="clear" class="ghost">Clear</button>
+              <button data-key="0">0</button>
+              <button data-key="back" class="ghost">⌫</button>
+            </div>
+          </div>
+
+          <div class="pin-group">
+            <label>Confirm PIN</label>
+            <div class="pin-display" id="pin-2-dots">
+              <span class="pin-dot"></span><span class="pin-dot"></span><span class="pin-dot"></span>
+              <span class="pin-dot"></span><span class="pin-dot"></span><span class="pin-dot"></span>
+            </div>
+            <input id="pin-2" type="hidden" value="">
+            <div class="numpad" data-numpad="pin-2">
+              <button data-key="1">1</button><button data-key="2">2</button><button data-key="3">3</button>
+              <button data-key="4">4</button><button data-key="5">5</button><button data-key="6">6</button>
+              <button data-key="7">7</button><button data-key="8">8</button><button data-key="9">9</button>
+              <button data-key="clear" class="ghost">Clear</button>
+              <button data-key="0">0</button>
+              <button data-key="back" class="ghost">⌫</button>
+            </div>
+          </div>
+
+          <footer class="step-footer">
+            <button id="btn-pin-back" class="ghost">← Back</button>
+            <button id="btn-finalize" class="primary">Finish Setup</button>
+          </footer>
+        </div>
+      </section>
+
+      <!-- Step 4: Done -->
+      <section class="step" data-step="4">
+        <div class="step-inner">
+          <h1>All set</h1>
+          <p class="lead">
+            Setup complete. The kiosk will reboot in a moment and start showing
+            Legacy Wall automatically.
+          </p>
+        </div>
+      </section>
+
+    </main>
 
     <div id="toast" class="toast"></div>
   </div>

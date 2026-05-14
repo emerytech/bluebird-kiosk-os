@@ -3,13 +3,15 @@
   --bb-blue-light: #3B82F6;
   --bb-bg: #0B1220;
   --bb-card: #111827;
+  --bb-card-elev: #1F2937;
   --bb-border: #1F2937;
   --bb-text: #F9FAFB;
+  --bb-text-soft: #D1D5DB;
   --bb-muted: #9CA3AF;
   --bb-success: #10B981;
   --bb-warn: #F59E0B;
   --bb-danger: #EF4444;
-  --bb-radius: 12px;
+  --bb-radius: 14px;
 }
 
 * { box-sizing: border-box; }
@@ -26,6 +28,241 @@ html, body {
   user-select: none;
 }
 
+a { color: var(--bb-blue-light); }
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--bb-card-elev);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.95em;
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Wizard layout — one card per step, large breathing room, page-feel.
+   ───────────────────────────────────────────────────────────────────────── */
+.wizard-body {
+  background: radial-gradient(ellipse at top, #14213d 0%, var(--bb-bg) 70%);
+}
+.wizard {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+.wizard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 28px;
+  border-bottom: 1px solid var(--bb-border);
+}
+.brand-mark {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+}
+.brand-mark .dot {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, var(--bb-blue-light), var(--bb-blue));
+}
+.progress {
+  display: flex;
+  gap: 10px;
+}
+.dot-step {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--bb-card-elev);
+  transition: background 200ms ease;
+}
+.dot-step.current { background: var(--bb-blue-light); }
+.dot-step.done    { background: var(--bb-blue); }
+.wizard-main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 24px;
+  overflow-y: auto;
+}
+
+.step { display: none; width: 100%; }
+.step.active { display: block; }
+.step-inner {
+  max-width: 720px;
+  margin: 0 auto;
+  background: var(--bb-card);
+  border: 1px solid var(--bb-border);
+  border-radius: var(--bb-radius);
+  padding: 40px 44px;
+  box-shadow: 0 30px 60px rgba(0, 0, 0, 0.3);
+}
+.step-meta {
+  color: var(--bb-muted);
+  font-size: 14px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  margin-bottom: 12px;
+}
+.step h1 {
+  font-size: 32px;
+  font-weight: 700;
+  margin: 0 0 12px;
+}
+.step .lead {
+  color: var(--bb-text-soft);
+  font-size: 18px;
+  line-height: 1.5;
+  margin-bottom: 28px;
+}
+.step .hint {
+  color: var(--bb-muted);
+  font-size: 14px;
+  margin-top: 8px;
+  min-height: 1.2em;
+}
+.step .muted { color: var(--bb-muted); }
+
+.step-footer {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+  margin-top: 28px;
+  padding-top: 24px;
+  border-top: 1px solid var(--bb-border);
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Buttons
+   ───────────────────────────────────────────────────────────────────────── */
+button {
+  border: 0;
+  border-radius: var(--bb-radius);
+  padding: 14px 22px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: manipulation;
+  min-height: 52px;
+  font-family: inherit;
+}
+button.primary {
+  background: var(--bb-blue-light);
+  color: white;
+  padding: 14px 28px;
+}
+button.primary:active { background: var(--bb-blue); }
+button.ghost {
+  background: transparent;
+  color: var(--bb-text-soft);
+  border: 1px solid var(--bb-border);
+}
+button.ghost:active { background: var(--bb-card-elev); }
+button.danger {
+  background: var(--bb-danger);
+  color: white;
+}
+
+/* Backward-compat for old templates (admin overlay) */
+button.secondary {
+  background: var(--bb-card-elev);
+  color: var(--bb-text);
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Inputs
+   ───────────────────────────────────────────────────────────────────────── */
+input[type="text"], input[type="password"], select, .big-input {
+  width: 100%;
+  background: var(--bb-bg);
+  color: var(--bb-text);
+  border: 1px solid var(--bb-border);
+  border-radius: var(--bb-radius);
+  padding: 14px 18px;
+  font-size: 18px;
+  font-family: inherit;
+}
+.big-input { font-size: 24px; padding: 18px 22px; }
+.big-input:focus { outline: 2px solid var(--bb-blue-light); }
+
+label {
+  display: block;
+  font-size: 14px;
+  color: var(--bb-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  margin-bottom: 8px;
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
+   WiFi list (network step)
+   ───────────────────────────────────────────────────────────────────────── */
+.wifi-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.wifi-row {
+  background: var(--bb-card-elev);
+  border: 1px solid var(--bb-border);
+  border-radius: var(--bb-radius);
+  padding: 12px 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.wifi-row .ssid { font-weight: 600; }
+.wifi-row .meta { color: var(--bb-muted); font-size: 13px; }
+.wifi-row button { padding: 10px 16px; min-height: 40px; font-size: 14px; }
+
+/* ───────────────────────────────────────────────────────────────────────────
+   PIN entry
+   ───────────────────────────────────────────────────────────────────────── */
+.pin-group {
+  background: var(--bb-bg);
+  border: 1px solid var(--bb-border);
+  border-radius: var(--bb-radius);
+  padding: 18px;
+  margin-bottom: 16px;
+}
+.pin-display {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  margin: 12px 0;
+}
+.pin-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--bb-muted);
+}
+.pin-dot.filled { background: var(--bb-blue-light); border-color: var(--bb-blue-light); }
+.numpad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  max-width: 320px;
+  margin: 12px auto 0;
+}
+.numpad button {
+  font-size: 24px;
+  height: 64px;
+  background: var(--bb-card-elev);
+  border: 1px solid var(--bb-border);
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Tabs (admin overlay)
+   ───────────────────────────────────────────────────────────────────────── */
 .shell {
   display: flex;
   flex-direction: column;
@@ -34,7 +271,6 @@ html, body {
   margin: 0 auto;
   padding: 32px;
 }
-
 .brand {
   display: flex;
   align-items: center;
@@ -55,7 +291,6 @@ html, body {
 .brand small {
   color: var(--bb-muted);
 }
-
 .card {
   background: var(--bb-card);
   border: 1px solid var(--bb-border);
@@ -63,53 +298,17 @@ html, body {
   padding: 24px;
   margin-bottom: 20px;
 }
-
 .card h2 {
   margin-top: 0;
   font-size: 20px;
   font-weight: 600;
 }
-
-button, .btn {
-  background: var(--bb-blue-light);
-  color: white;
-  border: 0;
-  border-radius: var(--bb-radius);
-  padding: 16px 24px;
-  font-size: 17px;
-  font-weight: 600;
-  cursor: pointer;
-  touch-action: manipulation;
-  min-height: 56px;
-}
-button:active, .btn:active {
-  background: var(--bb-blue);
-}
-button.secondary {
-  background: var(--bb-border);
-  color: var(--bb-text);
-}
-button.danger {
-  background: var(--bb-danger);
-}
-
-input[type="text"], input[type="password"], select {
-  width: 100%;
-  background: var(--bb-bg);
-  color: var(--bb-text);
-  border: 1px solid var(--bb-border);
-  border-radius: var(--bb-radius);
-  padding: 14px 16px;
-  font-size: 17px;
-}
-
 .row {
   display: flex;
   gap: 12px;
   align-items: center;
 }
 .row > * { flex: 1; }
-
 .tabs {
   display: flex;
   gap: 8px;
@@ -127,55 +326,12 @@ input[type="text"], input[type="password"], select {
   background: var(--bb-blue-light);
   color: white;
 }
-
 .pane { display: none; }
 .pane.active { display: block; }
 
-.wifi-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.wifi-row {
-  background: var(--bb-bg);
-  border: 1px solid var(--bb-border);
-  border-radius: var(--bb-radius);
-  padding: 14px 16px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  cursor: pointer;
-}
-.wifi-row .ssid { font-weight: 600; }
-.wifi-row .meta { color: var(--bb-muted); font-size: 14px; }
-
-.numpad {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-  max-width: 360px;
-  margin: 16px auto;
-}
-.numpad button {
-  font-size: 28px;
-  height: 80px;
-  background: var(--bb-card);
-  border: 1px solid var(--bb-border);
-}
-.pin-display {
-  display: flex;
-  gap: 12px;
-  justify-content: center;
-  margin: 24px 0;
-}
-.pin-dot {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  border: 2px solid var(--bb-muted);
-}
-.pin-dot.filled { background: var(--bb-blue-light); border-color: var(--bb-blue-light); }
-
+/* ───────────────────────────────────────────────────────────────────────────
+   Toast
+   ───────────────────────────────────────────────────────────────────────── */
 .toast {
   position: fixed;
   left: 50%;
@@ -184,11 +340,12 @@ input[type="text"], input[type="password"], select {
   background: var(--bb-card);
   border: 1px solid var(--bb-border);
   border-radius: var(--bb-radius);
-  padding: 14px 20px;
+  padding: 14px 22px;
   font-weight: 500;
   opacity: 0;
   transition: opacity 200ms;
   pointer-events: none;
+  z-index: 1000;
 }
 .toast.show { opacity: 1; }
 .toast.success { border-color: var(--bb-success); }
