@@ -87,6 +87,7 @@ rmdir /etc/systemd/logind.conf.d.disabled 2>/dev/null || true
 
 echo "==> kiosk-activate: enable kiosk services"
 systemctl enable NetworkManager.service
+systemctl unmask greetd.service
 systemctl enable greetd.service
 systemctl enable bluebird-admin.service
 systemctl enable bluebird-firstboot.service
@@ -107,6 +108,14 @@ systemctl set-default bluebird-kiosk.target
 echo "==> kiosk-activate: done"
 EOF
 chmod +x /usr/local/sbin/bluebird-kiosk-activate
+
+echo "==> bluebird-kiosk: disable services that would interfere with live boot"
+# Debian's greetd package auto-enables itself. We MUST disable it in the live
+# system or it'll find our greetd config and try to launch sway → DRM/EGL
+# failure under emulation → restart loop → no getty visible.
+# Activate script re-enables greetd post-install.
+systemctl disable greetd.service 2>/dev/null || true
+systemctl mask greetd.service 2>/dev/null || true
 
 echo "==> bluebird-kiosk: ensure live system has a working getty on tty1"
 # Live-config provides autologin to `user`; we keep that default and let live
