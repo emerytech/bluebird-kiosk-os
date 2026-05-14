@@ -29,6 +29,85 @@ from . import __version__, config
 from .services import display, nmcli_wrapper, pin, system
 
 
+# ── Pydantic request bodies ───────────────────────────────────────────────────
+# Defined at module scope, NOT inside create_app(): FastAPI introspects route
+# signatures with typing.get_type_hints() which only sees module globals, so
+# closure-local classes fall back to query-parameter parsing and the route
+# always 422s with "field 'body' required".
+
+class WifiConnectBody(BaseModel):
+    ssid: str = Field(..., min_length=1, max_length=64)
+    password: Optional[str] = Field(default=None, max_length=128)
+
+
+class SlugBody(BaseModel):
+    slug: str = Field(..., min_length=1, max_length=64)
+
+
+class PinBody(BaseModel):
+    pin: str = Field(..., min_length=6, max_length=6)
+    confirm: str = Field(..., min_length=6, max_length=6)
+
+
+class FinalizeBody(BaseModel):
+    slug: str = Field(..., min_length=1, max_length=64)
+    pin: str = Field(..., min_length=6, max_length=6)
+
+
+class AdminLoginBody(BaseModel):
+    pin: str = Field(..., min_length=6, max_length=6)
+
+
+class DisplayBody(BaseModel):
+    output: str = Field(..., min_length=1, max_length=64)
+    transform: Optional[str] = Field(default=None, pattern=r"^(normal|90|180|270)$")
+    mode: Optional[str] = Field(default=None, max_length=32)
+    brightness: Optional[int] = Field(default=None, ge=5, le=100)
+
+
+class ChangePinBody(BaseModel):
+    new_pin: str = Field(..., min_length=6, max_length=6)
+
+
+# ── Backend slug existence check ──────────────────────────────────────────────
+
+def slug_exists_remote(backend: str, slug: str) -> bool:
+    """Check whether a school slug has a working Legacy Wall.
+
+    Two strategies, tried in order:
+
+    1. The dedicated `/api/public/legacy-wall/exists` endpoint. Most
+       accurate — checks the legacy_wall add-on / product_mode, not just
+       URL routing. Requires the backend to have public_kiosk_routes.py
+       deployed.
+    2. Fallback: GET the actual Legacy Wall URL. If it returns 200, the
+       URL works, which is the only thing the kiosk actually cares about.
+       Lets us deploy kiosks before the dedicated endpoint reaches
+       production.
+    """
+    backend = backend.rstrip("/")
+    slug = slug.strip()
+    try:
+        resp = requests.get(
+            f"{backend}/api/public/legacy-wall/exists",
+            params={"slug": slug},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            return bool(resp.json().get("exists"))
+    except (requests.RequestException, ValueError):
+        pass
+    try:
+        resp = requests.get(
+            f"{backend}/{slug}/legacy-wall",
+            timeout=10,
+            allow_redirects=True,
+        )
+        return resp.status_code == 200
+    except requests.RequestException:
+        return False
+
+
 logger = logging.getLogger("bluebird-kiosk.server")
 
 HERE = Path(__file__).resolve().parent
@@ -73,10 +152,6 @@ def create_app() -> FastAPI:
             return _redirect("/")
         return templates.TemplateResponse("firstboot.html", {"request": request})
 
-    class WifiConnectBody(BaseModel):
-        ssid: str = Field(..., min_length=1, max_length=64)
-        password: Optional[str] = Field(default=None, max_length=128)
-
     @app.get("/firstboot/wifi/scan")
     async def firstboot_wifi_scan():
         return JSONResponse(
@@ -99,31 +174,12 @@ def create_app() -> FastAPI:
         ok, msg = nmcli_wrapper.connect(body.ssid, body.password)
         return JSONResponse({"ok": ok, "message": msg})
 
-    class SlugBody(BaseModel):
-        slug: str = Field(..., min_length=1, max_length=64)
-
     @app.post("/firstboot/slug/validate")
     async def firstboot_slug_validate(body: SlugBody):
         cfg = config.read_config()
-        url = (
-            cfg["BLUEBIRD_BACKEND"].rstrip("/")
-            + "/api/public/legacy-wall/exists?slug="
-            + body.slug.strip()
+        return JSONResponse(
+            {"exists": slug_exists_remote(cfg["BLUEBIRD_BACKEND"], body.slug)}
         )
-        try:
-            resp = requests.get(url, timeout=10)
-            data = resp.json()
-        except requests.RequestException as exc:
-            return JSONResponse({"exists": False, "error": str(exc)}, status_code=502)
-        return JSONResponse({"exists": bool(data.get("exists"))})
-
-    class PinBody(BaseModel):
-        pin: str = Field(..., min_length=6, max_length=6)
-        confirm: str = Field(..., min_length=6, max_length=6)
-
-    class FinalizeBody(BaseModel):
-        slug: str = Field(..., min_length=1, max_length=64)
-        pin: str = Field(..., min_length=6, max_length=6)
 
     @app.post("/firstboot/finalize")
     async def firstboot_finalize(body: FinalizeBody):
@@ -133,17 +189,7 @@ def create_app() -> FastAPI:
         )
         if not legacy_url:
             raise HTTPException(status_code=400, detail="Invalid backend or slug.")
-        # Confirm the slug really exists & has Legacy Wall enabled.
-        try:
-            check = requests.get(
-                cfg["BLUEBIRD_BACKEND"].rstrip("/")
-                + "/api/public/legacy-wall/exists?slug="
-                + body.slug.strip(),
-                timeout=10,
-            ).json()
-        except requests.RequestException as exc:
-            raise HTTPException(status_code=502, detail=f"Backend unreachable: {exc}")
-        if not check.get("exists"):
+        if not slug_exists_remote(cfg["BLUEBIRD_BACKEND"], body.slug):
             raise HTTPException(status_code=400, detail="Unknown school slug.")
 
         try:
@@ -178,9 +224,6 @@ def create_app() -> FastAPI:
             "admin.html",
             {"request": request, "version": __version__},
         )
-
-    class AdminLoginBody(BaseModel):
-        pin: str = Field(..., min_length=6, max_length=6)
 
     @app.post("/admin/login")
     async def admin_login(request: Request, body: AdminLoginBody):
@@ -249,12 +292,6 @@ def create_app() -> FastAPI:
             }
         )
 
-    class DisplayBody(BaseModel):
-        output: str = Field(..., min_length=1, max_length=64)
-        transform: Optional[str] = Field(default=None, pattern=r"^(normal|90|180|270)$")
-        mode: Optional[str] = Field(default=None, max_length=32)
-        brightness: Optional[int] = Field(default=None, ge=5, le=100)
-
     @app.post("/admin/display/apply", dependencies=[Depends(require_admin)])
     async def admin_display_apply(body: DisplayBody):
         messages = []
@@ -297,12 +334,7 @@ def create_app() -> FastAPI:
     @app.post("/admin/kiosk/slug", dependencies=[Depends(require_admin)])
     async def admin_kiosk_slug(body: SlugBody):
         cfg = config.read_config()
-        url = cfg["BLUEBIRD_BACKEND"].rstrip("/") + "/api/public/legacy-wall/exists?slug=" + body.slug.strip()
-        try:
-            check = requests.get(url, timeout=10).json()
-        except requests.RequestException as exc:
-            raise HTTPException(status_code=502, detail=f"Backend unreachable: {exc}")
-        if not check.get("exists"):
+        if not slug_exists_remote(cfg["BLUEBIRD_BACKEND"], body.slug):
             raise HTTPException(status_code=400, detail="Unknown school slug.")
         new_url = config.derive_legacy_wall_url(cfg["BLUEBIRD_BACKEND"], body.slug)
         config.write_config({"SCHOOL_SLUG": body.slug.strip(), "LEGACY_WALL_URL": new_url})
@@ -322,9 +354,6 @@ def create_app() -> FastAPI:
     @app.get("/admin/system/logs", dependencies=[Depends(require_admin)])
     async def admin_system_logs(lines: int = 200):
         return PlainTextResponse(system.recent_logs(lines))
-
-    class ChangePinBody(BaseModel):
-        new_pin: str = Field(..., min_length=6, max_length=6)
 
     @app.post("/admin/system/change-pin", dependencies=[Depends(require_admin)])
     async def admin_change_pin(body: ChangePinBody):
