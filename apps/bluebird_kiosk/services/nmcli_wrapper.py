@@ -82,14 +82,22 @@ def connect(ssid: str, password: Optional[str] = None) -> tuple[bool, str]:
 
 
 def current_status() -> dict:
-    """Return a summary of the current connection — for display in admin UI."""
+    """Return a summary of the current connection — for display in admin UI.
+
+    Uses two separate `nmcli` calls:
+      - `nmcli device status` lists every interface + state + connection name
+        (one device per line: device:type:state:connection)
+      - `nmcli -g IP4.ADDRESS device show <dev>` returns the first IPv4 on
+        the connected device (the field-name format only works with `show`)
+    """
+    eth = wifi = ip = None
     try:
         result = subprocess.run(
             [
                 NMCLI,
                 "--terse",
-                "--fields", "DEVICE,TYPE,STATE,CONNECTION,IP4.ADDRESS",
-                "device", "show",
+                "--fields", "DEVICE,TYPE,STATE,CONNECTION",
+                "device", "status",
             ],
             check=True,
             capture_output=True,
@@ -98,19 +106,41 @@ def current_status() -> dict:
         )
     except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return {"ethernet": None, "wifi": None, "ip": None}
-    eth = wifi = ip = None
+
+    primary_device = None
     for line in result.stdout.splitlines():
-        if line.startswith("DEVICE:"):
-            continue
         parts = line.split(":")
-        if len(parts) >= 4:
-            dev_type = parts[1] if len(parts) > 1 else ""
-            state = parts[2] if len(parts) > 2 else ""
-            connection = parts[3] if len(parts) > 3 else ""
-            if dev_type == "ethernet" and state == "connected":
-                eth = connection
-            elif dev_type == "wifi" and state == "connected":
-                wifi = connection
-        if line.startswith("IP4.ADDRESS"):
-            ip = parts[-1] if parts else None
+        if len(parts) < 3:
+            continue
+        device, dev_type, state = parts[0], parts[1], parts[2]
+        connection = parts[3] if len(parts) > 3 else ""
+        # Treat "connected" as connected; "connected (externally)" (loopback /
+        # ifupdown-managed) doesn't count. "disconnected" / "unmanaged" /
+        # "connecting" likewise don't.
+        if state != "connected":
+            continue
+        if dev_type == "ethernet" and not eth:
+            eth = connection or device
+            primary_device = device
+        elif dev_type == "wifi" and not wifi:
+            wifi = connection or device
+            if not primary_device:
+                primary_device = device
+
+    if primary_device:
+        try:
+            ip_result = subprocess.run(
+                [NMCLI, "-g", "IP4.ADDRESS", "device", "show", primary_device],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            first_line = ip_result.stdout.strip().splitlines()[0] if ip_result.stdout.strip() else ""
+            if first_line:
+                ip = first_line.split("/")[0]
+        except (FileNotFoundError, subprocess.CalledProcessError,
+                subprocess.TimeoutExpired, IndexError):
+            pass
+
     return {"ethernet": eth, "wifi": wifi, "ip": ip}
