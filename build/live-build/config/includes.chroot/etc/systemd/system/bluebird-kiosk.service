@@ -13,10 +13,9 @@ TTYPath=/dev/tty1
 TTYReset=yes
 TTYVHangup=yes
 EnvironmentFile=-/etc/bluebird/kiosk.conf
-Environment=XDG_RUNTIME_DIR=/run/user/1000
 Environment=WLR_NO_HARDWARE_CURSORS=1
-ExecStartPre=/bin/mkdir -p /run/user/1000
-ExecStartPre=/bin/chown bluebird-kiosk:bluebird-kiosk /run/user/1000
+# XDG_RUNTIME_DIR is set automatically by systemd-logind / PAM (pam_systemd)
+# at /run/user/$UID. PAMName=login above triggers that setup.
 ExecStart=/usr/bin/sway --config /etc/sway/config
 Restart=always
 RestartSec=2

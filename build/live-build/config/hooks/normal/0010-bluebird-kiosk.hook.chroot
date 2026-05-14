@@ -11,12 +11,14 @@
 #   to `user`, ready to launch Calamares.
 set -eu
 
-echo "==> bluebird-kiosk: create system group + user (UID/GID 1000)"
+echo "==> bluebird-kiosk: create system group + user (auto-assigned UID < 1000)"
+# System user, not UID 1000 — avoids collision with the live-config 'user'
+# account or any post-install admin user the operator creates.
 if ! getent group bluebird-kiosk >/dev/null; then
-    groupadd --gid 1000 bluebird-kiosk
+    groupadd --system bluebird-kiosk
 fi
 if ! id bluebird-kiosk >/dev/null 2>&1; then
-    useradd --uid 1000 --gid 1000 \
+    useradd --system --gid bluebird-kiosk \
         --home-dir /var/lib/bluebird-kiosk \
         --shell /usr/sbin/nologin \
         --no-create-home \

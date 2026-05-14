@@ -135,19 +135,23 @@ APT_PACKAGES=(
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${APT_PACKAGES[@]}"
 
 # ── User + directories ───────────────────────────────────────────────────────
-log "creating bluebird-kiosk system group + user (UID/GID 1000)"
+log "creating bluebird-kiosk system group + user"
+# System user (UID < 1000), auto-assigned. Decoupled from whatever UID the
+# Debian installer gave your admin account — they don't collide.
 if ! getent group bluebird-kiosk >/dev/null; then
-  groupadd --gid 1000 bluebird-kiosk
+  groupadd --system bluebird-kiosk
 fi
 if ! id bluebird-kiosk >/dev/null 2>&1; then
-  useradd --uid 1000 --gid 1000 \
+  useradd --system --gid bluebird-kiosk \
     --home-dir /var/lib/bluebird-kiosk --shell /usr/sbin/nologin \
     --no-create-home bluebird-kiosk
 fi
+KIOSK_UID="$(id -u bluebird-kiosk)"
+log "  bluebird-kiosk UID=$KIOSK_UID"
 install -d -o bluebird-kiosk -g bluebird-kiosk /var/lib/bluebird-kiosk
 install -d -o bluebird-kiosk -g bluebird-kiosk /etc/bluebird
-# Allow kiosk user to read its own /run dir.
-install -d -m 0700 -o bluebird-kiosk -g bluebird-kiosk /run/user/1000 || true
+# systemd-logind manages /run/user/$KIOSK_UID automatically once greetd opens
+# a session, so we don't pre-create it here.
 
 # ── Python packages ──────────────────────────────────────────────────────────
 log "installing bluebird_kiosk + bluebird_gesture Python packages"
