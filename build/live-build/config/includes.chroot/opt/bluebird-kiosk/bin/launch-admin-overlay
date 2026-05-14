@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Launch a separate Chromium window pointing at the PIN-gated admin overlay.
+# Used by:
+#   - the gesture daemon (5-finger long-press on a touchscreen)
+#   - the Ctrl+Alt+B sway keybinding (keyboard fallback, useful on kiosks
+#     with no touchscreen or while diagnosing)
+#
+# Already-open admin window is a no-op (Chromium's --new-window handles
+# focus); we don't try to deduplicate ourselves.
+set -eu
+
+exec /usr/bin/chromium \
+  --new-window \
+  --no-first-run \
+  --noerrdialogs \
+  --password-store=basic \
+  --user-data-dir=/var/lib/bluebird-kiosk/admin-chromium \
+  --window-size=800,1000 \
+  --app="http://127.0.0.1:7311/admin"
