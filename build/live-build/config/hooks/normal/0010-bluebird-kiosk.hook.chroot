@@ -3,10 +3,16 @@
 # and apply system hardening to the chroot during ISO build.
 set -eu
 
-echo "==> bluebird-kiosk: create system user"
+echo "==> bluebird-kiosk: create system group + user (UID/GID 1000)"
+if ! getent group bluebird-kiosk >/dev/null; then
+    groupadd --gid 1000 bluebird-kiosk
+fi
 if ! id bluebird-kiosk >/dev/null 2>&1; then
-    adduser --system --group --home /var/lib/bluebird-kiosk --shell /usr/sbin/nologin \
-        --uid 1000 --gid 1000 --disabled-password bluebird-kiosk || true
+    useradd --uid 1000 --gid 1000 \
+        --home-dir /var/lib/bluebird-kiosk \
+        --shell /usr/sbin/nologin \
+        --no-create-home \
+        bluebird-kiosk
 fi
 install -d -o bluebird-kiosk -g bluebird-kiosk /var/lib/bluebird-kiosk
 install -d -o bluebird-kiosk -g bluebird-kiosk /etc/bluebird

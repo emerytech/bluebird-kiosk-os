@@ -54,12 +54,23 @@ fi
 
 cd "$HERE/live-build"
 
+echo "==> Stage on-device apps into chroot includes"
+# The 0010-bluebird-kiosk hook pip-installs from /opt/bluebird-kiosk/src/.
+# Copy the apps tree there now so it's baked into the live filesystem.
+APPS_SRC="$ROOT/apps"
+APPS_DST="$HERE/live-build/config/includes.chroot/opt/bluebird-kiosk/src"
+rm -rf "$APPS_DST"
+mkdir -p "$APPS_DST"
+cp -a "$APPS_SRC/bluebird_kiosk" "$APPS_DST/"
+cp -a "$APPS_SRC/bluebird_gesture" "$APPS_DST/"
+
 echo "==> live-build clean"
 lb clean --purge || true
 
 echo "==> live-build config"
 lb config \
   --architectures amd64 \
+  --archive-areas "main contrib non-free non-free-firmware" \
   --binary-images iso-hybrid \
   --bootappend-live "boot=live components quiet splash" \
   --debian-installer false \

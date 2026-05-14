@@ -8,9 +8,9 @@ firmware-iwlwifi
 firmware-realtek
 firmware-misc-nonfree
 
-# Boot
+# Boot — UEFI only. Mini-PCs in 2026 all support UEFI; dropping grub-pc avoids
+# the BIOS/UEFI grub conflict (the two packages cannot coexist).
 grub-efi-amd64
-grub-pc
 
 # Display stack: Wayland + sway compositor
 sway
