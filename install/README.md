@@ -93,7 +93,30 @@ sudo reboot
 The script is idempotent — re-running it just refreshes file content, no
 data loss.
 
-## Recovery
+## Accessing the device-admin overlay
+
+After install, the kiosk runs Chromium fullscreen on Legacy Wall. There are
+two ways to open the admin overlay (a separate PIN-gated Chromium window
+with WiFi / display / kiosk / system tools, including **Factory reset**):
+
+| Input method | Gesture |
+|---|---|
+| Touchscreen | **5-finger long-press** anywhere for ~2 s |
+| Keyboard | **`Ctrl + Alt + B`** |
+
+Either opens an 800×1000 Chromium window pointed at the local admin app.
+Enter your 6-digit PIN, then use the tabs at top (Network / Display /
+Kiosk / **System**).
+
+The **Factory reset** button lives under the System tab. It deletes:
+- `/etc/bluebird/configured`
+- `/etc/bluebird/admin.pin`
+- `SCHOOL_SLUG` / `LEGACY_WALL_URL` / `DEVICE_ID` from `kiosk.conf`
+
+…then reboots into the firstboot wizard. Useful when redeploying a kiosk
+to a different school.
+
+## Recovery (if you've lost access)
 
 - **Lost the admin PIN** — `sudo rm /etc/bluebird/admin.pin && sudo reboot`, then the firstboot wizard re-runs.
 - **Forgot the school slug / want to change it** — `sudo rm /etc/bluebird/configured && sudo reboot`.
