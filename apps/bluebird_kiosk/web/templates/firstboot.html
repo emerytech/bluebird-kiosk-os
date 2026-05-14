@@ -28,7 +28,7 @@
         <div class="step-inner">
           <h1>Welcome</h1>
           <p class="lead">
-            This wizard sets up the kiosk in four steps: network, school identity,
+            This wizard sets up the kiosk in four steps: network, license code,
             and an admin PIN. It takes about two minutes.
           </p>
           <footer class="step-footer">
@@ -50,23 +50,23 @@
         </div>
       </section>
 
-      <!-- Step 2: School identity -->
+      <!-- Step 2: License code -->
       <section class="step" data-step="2">
         <div class="step-inner">
           <div class="step-meta">Step 2 of 4</div>
-          <h1>School Identity</h1>
+          <h1>License Code</h1>
           <p class="lead">
-            Enter your BlueBird school slug. It's the short identifier in your
-            school's URL — for example <code>nen</code> in
-            <code>bluebird-alerts.com/nen/legacy-wall</code>.
+            Enter the BlueBird kiosk license code provided by your administrator.
+            It looks like <code>BB-XXXX-XXXX-XXXX</code> and ties this device to
+            your school.
           </p>
-          <input id="slug-input" class="big-input" type="text"
-                 autocomplete="off" autocapitalize="off" spellcheck="false"
-                 placeholder="school-slug">
-          <p class="hint" id="slug-hint"></p>
+          <input id="license-input" class="big-input license-input" type="text"
+                 autocomplete="off" autocapitalize="characters" spellcheck="false"
+                 placeholder="BB-XXXX-XXXX-XXXX" maxlength="20">
+          <p class="hint" id="license-hint"></p>
           <footer class="step-footer">
-            <button id="btn-slug-back" class="ghost">← Back</button>
-            <button id="btn-slug" class="primary">Continue →</button>
+            <button id="btn-license-back" class="ghost">← Back</button>
+            <button id="btn-license" class="primary">Continue →</button>
           </footer>
         </div>
       </section>

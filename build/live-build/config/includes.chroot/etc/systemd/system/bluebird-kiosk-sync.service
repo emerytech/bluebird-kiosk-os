@@ -1,0 +1,24 @@
+[Unit]
+Description=BlueBird Kiosk sync loop (pull manifest, fetch media, flush events)
+After=network-online.target bluebird-admin.service
+Wants=network-online.target
+PartOf=bluebird-kiosk.target
+
+[Service]
+Type=simple
+User=bluebird-kiosk
+Group=bluebird-kiosk
+EnvironmentFile=-/etc/bluebird/kiosk.conf
+Environment=PYTHONPATH=/opt/bluebird-kiosk/src
+ExecStart=/usr/bin/python3 -m bluebird_kiosk.services.sync_client
+Restart=always
+RestartSec=10
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+# The sync service writes to /var/lib/bluebird-kiosk (cache.db + media/)
+ReadWritePaths=/var/lib/bluebird-kiosk
+
+[Install]
+WantedBy=bluebird-kiosk.target

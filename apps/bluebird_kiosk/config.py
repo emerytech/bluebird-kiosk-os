@@ -14,6 +14,9 @@ from typing import Dict, Optional
 CONF_PATH = Path(os.environ.get("BLUEBIRD_KIOSK_CONF", "/etc/bluebird/kiosk.conf"))
 CONFIGURED_FLAG = Path("/etc/bluebird/configured")
 PIN_HASH_PATH = Path("/etc/bluebird/admin.pin")
+LICENSE_TOKEN_PATH = Path(
+    os.environ.get("BLUEBIRD_LICENSE_TOKEN", "/etc/bluebird/license.token")
+)
 
 _KV_RE = re.compile(r"^([A-Z_][A-Z0-9_]*)=(.*)$")
 
@@ -95,3 +98,25 @@ def set_admin_pin_hash(hashed: bytes) -> None:
         os.chmod(PIN_HASH_PATH, 0o600)
     except OSError:
         pass
+
+
+def read_license_token() -> Optional[str]:
+    if not LICENSE_TOKEN_PATH.exists():
+        return None
+    try:
+        return LICENSE_TOKEN_PATH.read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
+def write_license_token(token: str) -> None:
+    LICENSE_TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+    LICENSE_TOKEN_PATH.write_text(token.strip() + "\n", encoding="utf-8")
+    try:
+        os.chmod(LICENSE_TOKEN_PATH, 0o600)
+    except OSError:
+        pass
+
+
+def has_license() -> bool:
+    return LICENSE_TOKEN_PATH.exists()

@@ -44,13 +44,16 @@ class SlugBody(BaseModel):
     slug: str = Field(..., min_length=1, max_length=64)
 
 
+class LicenseBody(BaseModel):
+    code: str = Field(..., min_length=8, max_length=32)
+
+
 class PinBody(BaseModel):
     pin: str = Field(..., min_length=6, max_length=6)
     confirm: str = Field(..., min_length=6, max_length=6)
 
 
 class FinalizeBody(BaseModel):
-    slug: str = Field(..., min_length=1, max_length=64)
     pin: str = Field(..., min_length=6, max_length=6)
 
 
@@ -181,29 +184,85 @@ def create_app() -> FastAPI:
             {"exists": slug_exists_remote(cfg["BLUEBIRD_BACKEND"], body.slug)}
         )
 
+    @app.post("/firstboot/license/redeem")
+    async def firstboot_license_redeem(body: LicenseBody):
+        """Trade a license code for a bearer token. Persists the token to
+        /etc/bluebird/license.token and records the slug + tenant name
+        into kiosk.conf so the rest of the wizard knows which school we
+        belong to.
+
+        We deliberately don't mark the device 'configured' here — the user
+        still has to set a PIN. Until then, /etc/bluebird/configured is
+        absent and the wizard remains the active surface.
+        """
+        cfg = config.read_config()
+        backend = (cfg.get("BLUEBIRD_BACKEND") or "").rstrip("/")
+        if not backend:
+            raise HTTPException(status_code=500, detail="Backend not configured.")
+        device_id = config.ensure_device_id()
+        try:
+            resp = requests.post(
+                f"{backend}/api/public/kiosk/license/redeem",
+                json={"code": body.code, "device_id": device_id},
+                timeout=15,
+            )
+        except requests.RequestException as exc:
+            raise HTTPException(status_code=502, detail=f"Network error: {exc}")
+        if resp.status_code == 404:
+            raise HTTPException(status_code=400, detail="Unknown or invalid code.")
+        if resp.status_code == 410:
+            # Either the license has been revoked or the tenant has been
+            # archived. From the user's perspective the code just doesn't work.
+            raise HTTPException(status_code=400, detail="License is no longer valid.")
+        if resp.status_code == 409:
+            raise HTTPException(
+                status_code=400,
+                detail="This code is bound to a different device.",
+            )
+        if resp.status_code >= 400:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Server rejected code (HTTP {resp.status_code}).",
+            )
+        try:
+            payload = resp.json()
+        except ValueError:
+            raise HTTPException(status_code=502, detail="Bad response from server.")
+
+        token = payload.get("token") or ""
+        slug = (payload.get("slug") or "").strip()
+        tenant_name = payload.get("tenant_name") or ""
+        if not token or not slug:
+            raise HTTPException(status_code=502, detail="Bad response from server.")
+
+        config.write_license_token(token)
+        legacy_url = config.derive_legacy_wall_url(backend, slug)
+        config.write_config(
+            {
+                "SCHOOL_SLUG": slug,
+                "LEGACY_WALL_URL": legacy_url,
+                "TENANT_NAME": tenant_name,
+            }
+        )
+        return JSONResponse(
+            {"ok": True, "slug": slug, "tenant_name": tenant_name}
+        )
+
     @app.post("/firstboot/finalize")
     async def firstboot_finalize(body: FinalizeBody):
+        # By the time we get here, the license redeem step has already
+        # persisted SCHOOL_SLUG + LEGACY_WALL_URL into kiosk.conf and
+        # written the bearer token to /etc/bluebird/license.token. We just
+        # need a PIN + the 'configured' flag.
         cfg = config.read_config()
-        legacy_url = config.derive_legacy_wall_url(
-            cfg["BLUEBIRD_BACKEND"], body.slug
-        )
-        if not legacy_url:
-            raise HTTPException(status_code=400, detail="Invalid backend or slug.")
-        if not slug_exists_remote(cfg["BLUEBIRD_BACKEND"], body.slug):
-            raise HTTPException(status_code=400, detail="Unknown school slug.")
-
+        if not (cfg.get("SCHOOL_SLUG") and cfg.get("LEGACY_WALL_URL")):
+            raise HTTPException(status_code=400, detail="Redeem a license first.")
+        if not config.has_license():
+            raise HTTPException(status_code=400, detail="Redeem a license first.")
         try:
             pin.set_pin(body.pin)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
-
-        config.ensure_device_id()
-        config.write_config(
-            {
-                "SCHOOL_SLUG": body.slug.strip(),
-                "LEGACY_WALL_URL": legacy_url,
-            }
-        )
         config.mark_configured()
         return JSONResponse({"ok": True})
 

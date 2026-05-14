@@ -5,7 +5,7 @@
 
 const stepEls = document.querySelectorAll('.step');
 const progressDots = document.querySelectorAll('.dot-step');
-const chosen = { ssid: '', slug: '', pin: '' };
+const chosen = { ssid: '', slug: '', tenant: '', pin: '' };
 let currentStep = 0;
 
 // ── Navigation ──────────────────────────────────────────────────────────────
@@ -22,7 +22,23 @@ function showStep(idx) {
   currentStep = idx;
   // Per-step entry behavior.
   if (idx === 1) loadNetwork();
-  if (idx === 2) document.getElementById('slug-input').focus();
+  if (idx === 2) document.getElementById('license-input').focus();
+}
+
+// ── License code formatting ─────────────────────────────────────────────────
+
+function normalizeLicenseCode(raw) {
+  // Strip whitespace + dashes, upper-case, then re-insert dashes every 4
+  // chars after the BB prefix. Idempotent for already-formatted codes.
+  const cleaned = String(raw || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!cleaned) return '';
+  let body = cleaned;
+  if (body.startsWith('BB')) body = body.slice(2);
+  const parts = [];
+  for (let i = 0; i < body.length && parts.length < 3; i += 4) {
+    parts.push(body.slice(i, i + 4));
+  }
+  return parts.length ? `BB-${parts.join('-')}` : 'BB';
 }
 
 // ── Toast ───────────────────────────────────────────────────────────────────
@@ -139,35 +155,40 @@ async function connectWifi(network) {
   }
 }
 
-// ── Step 2: School slug ─────────────────────────────────────────────────────
+// ── Step 2: License code ────────────────────────────────────────────────────
 
-async function validateSlug() {
-  const slug = document.getElementById('slug-input').value.trim();
-  const hint = document.getElementById('slug-hint');
+async function redeemLicense() {
+  const input = document.getElementById('license-input');
+  const hint = document.getElementById('license-hint');
+  const code = normalizeLicenseCode(input.value);
+  input.value = code;
   hint.textContent = '';
-  if (!slug) {
-    hint.textContent = 'Please enter a slug.';
+  if (code.length < 8) {
+    hint.textContent = 'Please enter the full license code.';
     return;
   }
-  hint.textContent = 'Checking…';
-  let r;
+  hint.textContent = 'Verifying…';
+  let resp;
   try {
-    r = await fetch('/firstboot/slug/validate', {
+    resp = await fetch('/firstboot/license/redeem', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ slug }),
-    }).then((r) => r.json());
+      body: JSON.stringify({ code }),
+    });
   } catch (e) {
     hint.textContent = `Network error: ${e}`;
     return;
   }
-  if (r.exists) {
-    chosen.slug = slug;
-    hint.textContent = '';
-    showStep(3);
-  } else {
-    hint.textContent = 'Unknown school slug, or Legacy Wall not enabled for that school.';
+  let body = {};
+  try { body = await resp.json(); } catch (e) { body = {}; }
+  if (!resp.ok) {
+    hint.textContent = body.detail || `Server rejected code (HTTP ${resp.status}).`;
+    return;
   }
+  chosen.slug = body.slug || '';
+  chosen.tenant = body.tenant_name || '';
+  hint.innerHTML = `<span class="status-ok">✓ Linked to ${escapeHTML(chosen.tenant || chosen.slug)}</span>`;
+  setTimeout(() => showStep(3), 600);
 }
 
 // ── Step 3: PIN ─────────────────────────────────────────────────────────────
@@ -211,7 +232,7 @@ async function finalize() {
     r = await fetch('/firstboot/finalize', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ slug: chosen.slug, pin: chosen.pin }),
+      body: JSON.stringify({ pin: chosen.pin }),
     });
   } catch (e) {
     toast(`Network error: ${e}`, 'error');
@@ -253,13 +274,20 @@ function escapeHTML(s) {
 
 document.getElementById('btn-start').addEventListener('click', () => showStep(1));
 document.getElementById('btn-network-continue').addEventListener('click', () => showStep(2));
-document.getElementById('btn-slug').addEventListener('click', validateSlug);
-document.getElementById('btn-slug-back').addEventListener('click', () => showStep(1));
+document.getElementById('btn-license').addEventListener('click', redeemLicense);
+document.getElementById('btn-license-back').addEventListener('click', () => showStep(1));
 document.getElementById('btn-finalize').addEventListener('click', finalize);
 document.getElementById('btn-pin-back').addEventListener('click', () => showStep(2));
 
-document.getElementById('slug-input').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') { e.preventDefault(); validateSlug(); }
+const licenseInput = document.getElementById('license-input');
+licenseInput.addEventListener('input', (e) => {
+  const formatted = normalizeLicenseCode(e.target.value);
+  if (formatted !== e.target.value) {
+    e.target.value = formatted;
+  }
+});
+licenseInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); redeemLicense(); }
 });
 
 buildNumpad('pin-1');

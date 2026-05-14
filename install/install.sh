@@ -270,6 +270,7 @@ ln -sf /usr/lib/systemd/system/greetd.service /etc/systemd/system/display-manage
 systemctl enable bluebird-admin.service
 systemctl enable bluebird-gesture.service
 systemctl enable bluebird-heartbeat.service
+systemctl enable bluebird-kiosk-sync.service
 systemctl enable unattended-upgrades.service
 systemctl set-default bluebird-kiosk.target
 # bluebird-kiosk.service and bluebird-firstboot.service are NOT enabled.
