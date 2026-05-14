@@ -8,6 +8,7 @@ Type=simple
 User=bluebird-kiosk
 Group=bluebird-kiosk
 EnvironmentFile=-/etc/bluebird/kiosk.conf
+Environment=PYTHONPATH=/opt/bluebird-kiosk/src
 WorkingDirectory=/opt/bluebird-kiosk
 ExecStart=/usr/bin/python3 -m bluebird_kiosk.server --bind 127.0.0.1 --port 7311
 Restart=on-failure

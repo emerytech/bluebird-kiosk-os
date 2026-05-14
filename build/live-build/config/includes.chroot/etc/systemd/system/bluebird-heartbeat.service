@@ -9,6 +9,7 @@ Type=simple
 User=bluebird-kiosk
 Group=bluebird-kiosk
 EnvironmentFile=-/etc/bluebird/kiosk.conf
+Environment=PYTHONPATH=/opt/bluebird-kiosk/src
 ExecStart=/usr/bin/python3 -m bluebird_kiosk.services.heartbeat
 Restart=always
 RestartSec=10

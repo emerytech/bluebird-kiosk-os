@@ -6,6 +6,7 @@ PartOf=bluebird-kiosk.target
 
 [Service]
 Type=simple
+Environment=PYTHONPATH=/opt/bluebird-kiosk/src
 ExecStart=/usr/bin/python3 -m bluebird_gesture
 Restart=always
 RestartSec=2

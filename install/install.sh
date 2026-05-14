@@ -154,13 +154,14 @@ install -d -o bluebird-kiosk -g bluebird-kiosk /etc/bluebird
 # a session, so we don't pre-create it here.
 
 # ── Python packages ──────────────────────────────────────────────────────────
-log "installing bluebird_kiosk + bluebird_gesture Python packages"
+log "staging bluebird_kiosk + bluebird_gesture Python packages"
+# We rsync the package directories to /opt/bluebird-kiosk/src/ and rely on
+# PYTHONPATH=/opt/bluebird-kiosk/src in the systemd units. No pip install
+# needed; the apt-installed python3-fastapi / python3-uvicorn / etc. provide
+# the third-party deps.
 install -d /opt/bluebird-kiosk/src
 rsync -a --delete "$KIOSK_OS/apps/bluebird_kiosk/" /opt/bluebird-kiosk/src/bluebird_kiosk/
 rsync -a --delete "$KIOSK_OS/apps/bluebird_gesture/" /opt/bluebird-kiosk/src/bluebird_gesture/
-
-pip3 install --break-system-packages --no-cache-dir /opt/bluebird-kiosk/src/bluebird_kiosk
-pip3 install --break-system-packages --no-cache-dir /opt/bluebird-kiosk/src/bluebird_gesture
 
 # ── Drop /etc and /opt files ─────────────────────────────────────────────────
 log "installing systemd units"
@@ -218,6 +219,10 @@ systemctl daemon-reload
 systemctl enable NetworkManager.service
 systemctl unmask greetd.service 2>/dev/null || true
 systemctl enable greetd.service
+# Point /etc/systemd/system/display-manager.service at greetd explicitly —
+# graphical.target Wants display-manager.service, and we want our DM to be
+# greetd regardless of what other DM packages might leave behind.
+ln -sf /usr/lib/systemd/system/greetd.service /etc/systemd/system/display-manager.service
 systemctl enable bluebird-admin.service
 systemctl enable bluebird-gesture.service
 systemctl enable bluebird-heartbeat.service

@@ -1,6 +1,9 @@
 [Unit]
 Description=BlueBird Kiosk runtime target
 Documentation=https://bluebird-alerts.com/docs/kiosk-os
-Requires=multi-user.target
-After=multi-user.target NetworkManager.service
+# Extend graphical.target so display-manager (greetd) gets pulled in.
+# graphical.target itself Requires multi-user.target, so all the base
+# system services come along automatically.
+Requires=graphical.target
+After=graphical.target NetworkManager.service
 AllowIsolate=yes
