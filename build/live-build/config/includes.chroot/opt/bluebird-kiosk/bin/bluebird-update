@@ -16,7 +16,7 @@
 # script is safe (idempotent) — install.sh itself preserves config + state.
 set -euo pipefail
 
-BASE="${BLUEBIRD_BACKEND:-https://bluebird-alerts.com}"
+BASE="${BLUEBIRD_BACKEND:-https://bluebirdalerts.com}"
 VERSION_FILE="/etc/bluebird/kiosk-os.version"
 VERSION_URL="${BASE}/api/public/kiosk-os/version"
 BOOTSTRAP_URL="${BASE}/api/public/install-kiosk.sh"

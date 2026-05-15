@@ -21,7 +21,11 @@ LICENSE_TOKEN_PATH = Path(
 _KV_RE = re.compile(r"^([A-Z_][A-Z0-9_]*)=(.*)$")
 
 _DEFAULTS: Dict[str, str] = {
-    "BLUEBIRD_BACKEND": "https://bluebird-alerts.com",
+    # Canonical no-dash domain. The dashed bluebird-alerts.com still works
+    # via a 308 redirect, but defaulting to the canonical one shaves a
+    # round-trip on every API call and avoids client edge cases that
+    # mishandle redirects on POST.
+    "BLUEBIRD_BACKEND": "https://bluebirdalerts.com",
     "SCHOOL_SLUG": "",
     "LEGACY_WALL_URL": "",
     "DEVICE_ID": "",
