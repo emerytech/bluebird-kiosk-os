@@ -28,6 +28,7 @@
         <button data-tab="network" class="active">Network</button>
         <button data-tab="display">Display</button>
         <button data-tab="kiosk">Kiosk</button>
+        <button data-tab="console">Console</button>
         <button data-tab="system">System</button>
       </div>
 
@@ -72,6 +73,29 @@
           <div class="row" style="margin-top:16px">
             <button id="btn-kiosk-restart">Restart kiosk</button>
             <button id="btn-kiosk-slug" class="secondary">Change school slug</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="pane" data-tab="console">
+        <div class="card">
+          <h2>Console</h2>
+          <p style="font-size:0.85em;color:var(--bb-muted);margin-bottom:12px;">
+            Run a diagnostic command from the BlueBird-approved list. Output
+            stays on this device and is also written to the system journal.
+          </p>
+          <div style="display:flex;gap:8px;margin-bottom:14px;">
+            <button id="btn-console-refresh" class="secondary">↻ Refresh list</button>
+            <span id="console-meta" style="color:var(--bb-muted);font-size:0.85em;align-self:center;"></span>
+          </div>
+          <div id="console-buttons" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px;margin-bottom:16px;"></div>
+          <div id="console-result" style="display:none;">
+            <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
+              <strong id="console-result-label"></strong>
+              <span id="console-result-exit" style="font-family:ui-monospace,monospace;font-size:0.85em;color:var(--bb-muted);"></span>
+            </div>
+            <pre id="console-result-cmd" style="white-space:pre-wrap;background:var(--bb-bg);padding:8px 12px;border-radius:6px;font-size:0.8em;color:var(--bb-muted);margin-bottom:8px;"></pre>
+            <pre id="console-result-output" style="white-space:pre-wrap;background:var(--bb-bg);padding:12px;border-radius:8px;max-height:400px;overflow:auto;font-size:0.85em;"></pre>
           </div>
         </div>
       </div>

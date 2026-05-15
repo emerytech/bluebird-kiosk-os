@@ -135,6 +135,144 @@ def update_status(log_lines: int = 80) -> dict:
     return {"state": state, "log": logs.stdout or ""}
 
 
+def list_diagnostics_for_console() -> list:
+    """Return the cached diagnostic list (UI-shaped) for the Console tab."""
+    from . import diagnostics
+    return [
+        {
+            "id": d.id,
+            "label": d.label,
+            "command": d.command,
+            "description": d.description,
+            "sort_order": d.sort_order,
+        }
+        for d in diagnostics.load_cached_diagnostics()
+    ]
+
+
+def refresh_diagnostics_from_backend() -> dict:
+    """On-demand refresh of the cached diagnostic list. Called by the admin
+    overlay's Console tab so staff can pick up server-side edits without
+    waiting for the next 6-hour sync tick."""
+    from . import diagnostics
+    from .. import config
+    cfg = config.read_config()
+    backend = cfg.get("BLUEBIRD_BACKEND") or ""
+    try:
+        token = (Path("/etc/bluebird/license.token").read_text(encoding="utf-8")
+                 .strip())
+    except OSError:
+        token = ""
+    result = diagnostics.refresh_from_server(backend, token)
+    if result is None:
+        return {"ok": False, "count": len(diagnostics.load_cached_diagnostics())}
+    return {"ok": True, "count": len(result)}
+
+
+def run_diagnostic(diag_id: int, timeout_s: int = 30) -> dict:
+    """Execute one entry from the cached super-admin diagnostic allow-list.
+
+    Two gates protect this surface:
+      1. The request body only carries `diag_id` (an integer). The
+         command itself is read from the locally-cached allow-list. So a
+         forged request can only invoke commands that are already on the
+         allow-list — never arbitrary strings.
+      2. The cached command is re-checked against the regex guard
+         immediately before exec, so a row that slipped past a buggy or
+         outdated server-side guard still won't run.
+
+    Runs as the unprivileged `bluebird-kiosk` user (sudo not granted).
+    30-second timeout, output capped at 64 KB, every execution logged
+    to the journal under tag `bluebird-admin-shell`.
+    """
+    from . import diagnostics  # late import to avoid module cycle
+
+    diag = diagnostics.get_diagnostic_by_id(int(diag_id))
+    if diag is None:
+        return {
+            "ok": False,
+            "error": "not_in_allow_list",
+            "label": "",
+            "cmd": "",
+            "stdout": "",
+            "stderr": (
+                f"Diagnostic #{diag_id} is not in the locally-cached "
+                "allow-list. Refresh from the Console tab or wait for the "
+                "next sync tick."
+            ),
+            "exit_code": 126,
+            "timed_out": False,
+        }
+    cmd = diag.command.strip()
+    guard = diagnostics.is_destructive(cmd)
+    if guard is not None:
+        return {
+            "ok": False,
+            "error": "destructive_pattern",
+            "label": diag.label,
+            "cmd": cmd,
+            "stdout": "",
+            "stderr": (
+                f"Refusing to execute: the cached command matches the "
+                f"destructive-pattern guard ({guard}). The server should "
+                "have rejected this on save."
+            ),
+            "exit_code": 126,
+            "timed_out": False,
+        }
+    if not cmd:
+        return {
+            "ok": False, "error": "empty_command", "label": diag.label,
+            "cmd": "", "stdout": "", "stderr": "(empty command)",
+            "exit_code": 0, "timed_out": False,
+        }
+
+    try:
+        subprocess.run(
+            ["/usr/bin/logger", "-t", "bluebird-admin-shell",
+             f"diag_id={diag.id} label={diag.label!r} cmd={cmd!r}"],
+            check=False, timeout=2,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    try:
+        result = subprocess.run(
+            ["/bin/bash", "-c", cmd],
+            capture_output=True,
+            text=True,
+            timeout=max(1, min(120, int(timeout_s))),
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "ok": True, "label": diag.label, "cmd": cmd,
+            "stdout": (exc.stdout.decode("utf-8", "replace") if exc.stdout else ""),
+            "stderr": (exc.stderr.decode("utf-8", "replace") if exc.stderr else "")
+                + f"\n[command timed out after {timeout_s}s]",
+            "exit_code": 124, "timed_out": True,
+        }
+    except FileNotFoundError as exc:
+        return {
+            "ok": True, "label": diag.label, "cmd": cmd,
+            "stdout": "", "stderr": f"shell missing: {exc}",
+            "exit_code": 127, "timed_out": False,
+        }
+
+    stdout = result.stdout or ""
+    stderr = result.stderr or ""
+    LIMIT = 64 * 1024
+    if len(stdout) > LIMIT:
+        stdout = stdout[:LIMIT] + f"\n[…{len(stdout) - LIMIT} bytes truncated]"
+    if len(stderr) > LIMIT:
+        stderr = stderr[:LIMIT] + f"\n[…{len(stderr) - LIMIT} bytes truncated]"
+    return {
+        "ok": True, "label": diag.label, "cmd": cmd,
+        "stdout": stdout, "stderr": stderr,
+        "exit_code": int(result.returncode), "timed_out": False,
+    }
+
+
 def factory_reset() -> tuple[bool, str]:
     """Drop the device back into first-boot state without reflashing.
 

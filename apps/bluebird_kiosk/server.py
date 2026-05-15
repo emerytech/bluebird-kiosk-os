@@ -80,6 +80,10 @@ class ChangePinBody(BaseModel):
     new_pin: str = Field(..., min_length=6, max_length=6)
 
 
+class RunDiagnosticBody(BaseModel):
+    diag_id: int = Field(..., ge=1)
+
+
 # ── Backend slug existence check ──────────────────────────────────────────────
 
 def slug_exists_remote(backend: str, slug: str) -> bool:
@@ -464,6 +468,27 @@ def create_app() -> FastAPI:
         the UI polls /admin/system/update-status to follow progress."""
         ok, msg = system.start_update()
         return JSONResponse({"ok": ok, "message": msg})
+
+    # ── Console tab (diagnostic allow-list) ──────────────────────────────────
+
+    @app.get("/admin/system/diagnostics", dependencies=[Depends(require_admin)])
+    async def admin_list_diagnostics():
+        """Return the locally-cached diagnostic allow-list for the Console tab."""
+        return JSONResponse({"diagnostics": system.list_diagnostics_for_console()})
+
+    @app.post("/admin/system/diagnostics/refresh", dependencies=[Depends(require_admin)])
+    async def admin_refresh_diagnostics():
+        """Force a fresh pull from the BlueBird server so the operator can
+        see server-side edits without waiting for the next sync tick."""
+        return JSONResponse(system.refresh_diagnostics_from_backend())
+
+    @app.post("/admin/system/diagnostics/run", dependencies=[Depends(require_admin)])
+    async def admin_run_diagnostic(body: RunDiagnosticBody):
+        """Execute one diagnostic by id. The runner enforces:
+          • id must be present in the locally-cached allow-list, AND
+          • the cached command must still pass the regex guard.
+        See services/system.py::run_diagnostic for the trust model."""
+        return JSONResponse(system.run_diagnostic(int(body.diag_id)))
 
     @app.get("/admin/system/update-status", dependencies=[Depends(require_admin)])
     async def admin_update_status(lines: int = 80):

@@ -273,17 +273,33 @@ class SyncClient:
     def run_once(self) -> Dict[str, Any]:
         manifest_stats = self.pull_manifest()
         if not manifest_stats.get("ok"):
-            # If pull failed we still try to flush events — they don't depend
-            # on cursor state and may have been queued offline.
+            # If pull failed we still try to flush events + refresh diagnostics
+            # — they don't depend on cursor state and may have been queued offline.
             push_stats = self.flush_events()
-            return {"manifest": manifest_stats, "push": push_stats}
+            diag_stats = self.refresh_diagnostics()
+            return {
+                "manifest": manifest_stats,
+                "push": push_stats,
+                "diagnostics": diag_stats,
+            }
         fetch_stats = self.fetch_missing_media()
         push_stats = self.flush_events()
+        diag_stats = self.refresh_diagnostics()
         return {
             "manifest": manifest_stats,
             "fetch": fetch_stats,
             "push": push_stats,
+            "diagnostics": diag_stats,
         }
+
+    def refresh_diagnostics(self) -> Dict[str, Any]:
+        """Pull the super-admin diagnostic allow-list and cache it locally.
+        Soft-failure on any error — the on-disk cache stays usable offline."""
+        from . import diagnostics
+        result = diagnostics.refresh_from_server(self.backend, self.token)
+        if result is None:
+            return {"ok": False}
+        return {"ok": True, "count": len(result)}
 
 
 # ── Service entry point ──────────────────────────────────────────────────────

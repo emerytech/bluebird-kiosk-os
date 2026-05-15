@@ -39,6 +39,7 @@ function setTab(name) {
   );
   if (name === 'network') loadNetwork();
   if (name === 'display') loadDisplay();
+  if (name === 'console') consoleLoad();
   if (name === 'kiosk') loadKiosk();
 }
 
@@ -269,6 +270,104 @@ document.getElementById('btn-sys-logs').addEventListener('click', loadLogs);
 document.getElementById('btn-sys-pin').addEventListener('click', changePin);
 document.getElementById('btn-sys-reset').addEventListener('click', factoryReset);
 document.getElementById('btn-sys-update').addEventListener('click', checkForUpdates);
+
+// ── Console tab (allow-listed diagnostic runner) ────────────────────────────
+
+async function consoleLoad() {
+  const buttons = document.getElementById('console-buttons');
+  const meta = document.getElementById('console-meta');
+  buttons.innerHTML = '<span style="color:var(--bb-muted);font-size:0.85em;">Loading…</span>';
+  try {
+    const r = await api('/admin/system/diagnostics');
+    const data = await r.json();
+    const list = data.diagnostics || [];
+    meta.textContent = list.length
+      ? `${list.length} command${list.length === 1 ? '' : 's'} available`
+      : 'No commands cached — tap Refresh to pull from BlueBird.';
+    buttons.innerHTML = '';
+    for (const d of list) {
+      const btn = document.createElement('button');
+      btn.className = 'secondary';
+      btn.style.textAlign = 'left';
+      btn.style.whiteSpace = 'normal';
+      btn.innerHTML = `
+        <div style="font-weight:600;">${escapeHTML(d.label)}</div>
+        ${d.description ? `<div style="font-size:0.78em;color:var(--bb-muted);margin-top:2px;">${escapeHTML(d.description)}</div>` : ''}
+      `;
+      btn.addEventListener('click', () => consoleRun(d.id, btn));
+      buttons.appendChild(btn);
+    }
+    if (!list.length) {
+      const btn = document.createElement('button');
+      btn.className = 'secondary';
+      btn.textContent = 'Refresh from server';
+      btn.addEventListener('click', consoleRefresh);
+      buttons.appendChild(btn);
+    }
+  } catch (e) {
+    meta.textContent = 'Load failed.';
+    buttons.innerHTML = '';
+  }
+}
+
+async function consoleRefresh() {
+  const meta = document.getElementById('console-meta');
+  meta.textContent = 'Refreshing…';
+  try {
+    const r = await api('/admin/system/diagnostics/refresh', { method: 'POST' });
+    const data = await r.json();
+    if (!data.ok) toast('Refresh failed — using cached list.', 'error');
+  } catch (e) { /* fall through to load */ }
+  consoleLoad();
+}
+
+async function consoleRun(diagId, btn) {
+  const resBox = document.getElementById('console-result');
+  const lbl = document.getElementById('console-result-label');
+  const cmd = document.getElementById('console-result-cmd');
+  const exit = document.getElementById('console-result-exit');
+  const out = document.getElementById('console-result-output');
+  resBox.style.display = 'block';
+  lbl.textContent = 'Running…';
+  exit.textContent = '';
+  cmd.textContent = '';
+  out.textContent = '';
+  if (btn) btn.disabled = true;
+  try {
+    const r = await api('/admin/system/diagnostics/run', {
+      method: 'POST',
+      body: JSON.stringify({ diag_id: diagId }),
+    });
+    const d = await r.json();
+    lbl.textContent = d.label || 'Result';
+    cmd.textContent = '$ ' + (d.cmd || '');
+    if (d.error) {
+      exit.textContent = `error: ${d.error}`;
+      exit.style.color = '#F87171';
+      out.textContent = d.stderr || '';
+    } else {
+      const code = d.exit_code != null ? d.exit_code : '?';
+      exit.textContent = `exit ${code}${d.timed_out ? ' · timed out' : ''}`;
+      exit.style.color = code === 0 ? '' : '#FBBF24';
+      const stdout = d.stdout || '';
+      const stderr = d.stderr || '';
+      out.textContent = stderr ? `${stdout}\n\n--- stderr ---\n${stderr}` : stdout || '(no output)';
+    }
+  } catch (e) {
+    lbl.textContent = 'Error';
+    exit.textContent = String(e);
+    exit.style.color = '#F87171';
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function escapeHTML(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+document.getElementById('btn-console-refresh').addEventListener('click', consoleRefresh);
 
 setTab('network');
 showLogin();
