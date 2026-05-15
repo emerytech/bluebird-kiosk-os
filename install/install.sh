@@ -312,14 +312,30 @@ fi
 # Stamp /etc/bluebird/kiosk-os.version with whatever the server currently
 # advertises so the first auto-update tick is a no-op. Failure here is
 # non-fatal (auto-update will re-detect on next tick and just self-heal).
-BACKEND_FOR_VERSION="$(grep -E '^BLUEBIRD_BACKEND=' /etc/bluebird/kiosk.conf 2>/dev/null \
-  | head -n1 | cut -d= -f2- | tr -d '"'"'"' || true)"
-BACKEND_FOR_VERSION="${BACKEND_FOR_VERSION:-https://bluebird-alerts.com}"
+# Source the kiosk.conf inside a subshell so we don't pollute this script's
+# env. The file is plain KEY=value (no quotes), so no stripping is needed.
+BACKEND_FOR_VERSION="$(
+  if [[ -f /etc/bluebird/kiosk.conf ]]; then
+    # shellcheck disable=SC1091
+    source /etc/bluebird/kiosk.conf 2>/dev/null || true
+  fi
+  printf '%s' "${BLUEBIRD_BACKEND:-https://bluebird-alerts.com}"
+)"
 log "recording installed version (from ${BACKEND_FOR_VERSION})"
-if RECORDED_VERSION="$(curl -fsSL --max-time 10 "${BACKEND_FOR_VERSION}/api/public/kiosk-os/version" 2>/dev/null \
-    | /usr/bin/python3 -c 'import json,sys
-try: print(json.load(sys.stdin).get("version",""))
-except Exception: pass' 2>/dev/null)" && [[ -n "$RECORDED_VERSION" ]]; then
+VERSION_JSON="$(curl -fsSL --max-time 10 \
+  "${BACKEND_FOR_VERSION}/api/public/kiosk-os/version" 2>/dev/null || true)"
+RECORDED_VERSION=""
+if [[ -n "$VERSION_JSON" ]]; then
+  # Parse JSON via python3 (always installed via apt list). Avoid jq —
+  # not on the kiosk apt list.
+  RECORDED_VERSION="$(printf '%s' "$VERSION_JSON" | /usr/bin/python3 -c \
+    'import json, sys
+try:
+    print(json.load(sys.stdin).get("version", ""))
+except Exception:
+    pass' 2>/dev/null || true)"
+fi
+if [[ -n "$RECORDED_VERSION" ]]; then
   printf '%s\n' "$RECORDED_VERSION" > /etc/bluebird/kiosk-os.version
   log "  installed version: $RECORDED_VERSION"
 else
