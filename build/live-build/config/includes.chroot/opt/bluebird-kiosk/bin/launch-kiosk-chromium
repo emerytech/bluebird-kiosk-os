@@ -34,6 +34,28 @@ if [[ -n "${KIOSK_URL:-}" ]]; then
   URL="$KIOSK_URL"
 fi
 
+# Wait for bluebird-admin.service to be reachable before launching Chromium.
+# Without this, sway's `exec` fires Chromium immediately on session start —
+# faster than systemd brings up the FastAPI server — and Chromium ends up
+# stuck on a "connection refused" page (no URL bar in --kiosk to recover).
+# Skip the wait if the URL is an explicit cloud override.
+if [[ "$URL" == http://127.0.0.1:* ]]; then
+  HEALTH="http://127.0.0.1:${ADMIN_PORT}/_health"
+  for _ in $(seq 1 90); do
+    if /usr/bin/python3 -c "
+import sys, urllib.request
+try:
+    r = urllib.request.urlopen('$HEALTH', timeout=1)
+    sys.exit(0 if r.status == 200 else 1)
+except Exception:
+    sys.exit(1)
+" 2>/dev/null; then
+      break
+    fi
+    sleep 1
+  done
+fi
+
 exec /usr/bin/chromium \
   --kiosk \
   --noerrdialogs \
