@@ -182,6 +182,80 @@ async function factoryReset() {
   await api('/admin/system/factory-reset', { method: 'POST' });
 }
 
+// ── Software updates ────────────────────────────────────────────────────────
+//
+// "Check for updates" kicks the bluebird-update.service oneshot and then
+// polls /admin/system/update-status every 2s. When the unit goes back to
+// inactive (or failed), we stop polling and offer a reboot.
+
+let _updatePollTimer = null;
+
+function setUpdateState(label) {
+  const el = document.getElementById('update-state');
+  if (el) el.textContent = label || '';
+}
+
+async function checkForUpdates() {
+  if (_updatePollTimer) return;  // already running
+  const btn = document.getElementById('btn-sys-update');
+  const out = document.getElementById('update-output');
+  btn.disabled = true;
+  out.style.display = 'block';
+  out.textContent = '';
+  setUpdateState('starting…');
+
+  let r;
+  try {
+    r = await api('/admin/system/check-updates', { method: 'POST' });
+  } catch (e) {
+    setUpdateState('failed to start');
+    btn.disabled = false;
+    toast('Could not start update: ' + e, 'error');
+    return;
+  }
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}));
+    setUpdateState('failed to start');
+    btn.disabled = false;
+    toast(body.message || 'Could not start update.', 'error');
+    return;
+  }
+
+  _updatePollTimer = setInterval(pollUpdateStatus, 2000);
+  pollUpdateStatus();
+}
+
+async function pollUpdateStatus() {
+  let r, body;
+  try {
+    r = await api('/admin/system/update-status?lines=120');
+    body = await r.json();
+  } catch (e) {
+    return;
+  }
+  const out = document.getElementById('update-output');
+  if (body.log) out.textContent = body.log;
+  out.scrollTop = out.scrollHeight;
+
+  const state = body.state || 'unknown';
+  setUpdateState('state: ' + state);
+
+  const done = state === 'inactive' || state === 'failed';
+  if (done) {
+    clearInterval(_updatePollTimer);
+    _updatePollTimer = null;
+    document.getElementById('btn-sys-update').disabled = false;
+    if (state === 'failed') {
+      toast('Update failed. See log above.', 'error');
+      return;
+    }
+    // Success — most kiosk-side changes need a reboot to take effect.
+    if (confirm('Update complete. Reboot now to apply?')) {
+      rebootSystem();
+    }
+  }
+}
+
 document.getElementById('btn-login').addEventListener('click', login);
 document.querySelectorAll('.tabs button').forEach((b) =>
   b.addEventListener('click', () => setTab(b.dataset.tab))
@@ -194,6 +268,7 @@ document.getElementById('btn-sys-shutdown').addEventListener('click', shutdownSy
 document.getElementById('btn-sys-logs').addEventListener('click', loadLogs);
 document.getElementById('btn-sys-pin').addEventListener('click', changePin);
 document.getElementById('btn-sys-reset').addEventListener('click', factoryReset);
+document.getElementById('btn-sys-update').addEventListener('click', checkForUpdates);
 
 setTab('network');
 showLogin();

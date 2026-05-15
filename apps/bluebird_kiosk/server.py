@@ -458,6 +458,18 @@ def create_app() -> FastAPI:
     async def admin_system_logs(lines: int = 200):
         return PlainTextResponse(system.recent_logs(lines))
 
+    @app.post("/admin/system/check-updates", dependencies=[Depends(require_admin)])
+    async def admin_check_updates():
+        """Kick off the oneshot bluebird-update.service. Returns immediately;
+        the UI polls /admin/system/update-status to follow progress."""
+        ok, msg = system.start_update()
+        return JSONResponse({"ok": ok, "message": msg})
+
+    @app.get("/admin/system/update-status", dependencies=[Depends(require_admin)])
+    async def admin_update_status(lines: int = 80):
+        """Current state of bluebird-update.service + recent journal output."""
+        return JSONResponse(system.update_status(lines))
+
     @app.post("/admin/system/change-pin", dependencies=[Depends(require_admin)])
     async def admin_change_pin(body: ChangePinBody):
         try:

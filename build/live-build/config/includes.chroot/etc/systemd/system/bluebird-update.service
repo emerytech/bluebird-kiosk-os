@@ -1,0 +1,34 @@
+[Unit]
+Description=BlueBird Kiosk OS — pull latest install.sh from production and apply
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Oneshot so the admin server can wait on `systemctl is-active` to flip back
+# to inactive when the update finishes. The exec sequence mirrors the manual
+# update one-liner — curl the bootstrap, then exec it.
+#
+# Triggered from the admin overlay via `systemctl start bluebird-update.service`.
+# The existing polkit rule lets bluebird-kiosk do that without a password
+# prompt (org.freedesktop.systemd1.manage-units is already permitted).
+Type=oneshot
+RemainAfterExit=no
+
+# Use a working directory we own so install.sh's relative path resolution
+# isn't surprised.
+WorkingDirectory=/tmp
+
+ExecStart=/bin/bash -c '\
+  set -e ; \
+  echo "[bluebird-update] starting at $(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ)" ; \
+  echo "[bluebird-update] fetching install bootstrap …" ; \
+  /usr/bin/curl -fsSL https://bluebird-alerts.com/api/public/install-kiosk.sh -o /tmp/bluebird-install-kiosk.sh ; \
+  echo "[bluebird-update] running install.sh …" ; \
+  /bin/bash /tmp/bluebird-install-kiosk.sh ; \
+  echo "[bluebird-update] complete at $(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ)" ; \
+'
+
+# 15 minutes is generous; apt + rsync should be <2 min in practice.
+TimeoutStartSec=900
+StandardOutput=journal
+StandardError=journal

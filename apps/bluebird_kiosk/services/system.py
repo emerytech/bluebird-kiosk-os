@@ -66,6 +66,75 @@ def recent_logs(lines: int = 200) -> str:
     return result.stdout or result.stderr or ""
 
 
+def start_update() -> tuple[bool, str]:
+    """Kick off a `bluebird-update.service` run in the background.
+
+    The service is a oneshot unit that re-fetches the install bootstrap from
+    bluebird-alerts.com and re-runs install.sh — same as the manual
+    `curl … | sudo bash` workflow, but routed through a systemd unit so we
+    can drive it from the unprivileged admin app via polkit-allowed
+    `systemctl start`.
+
+    Returns immediately (the unit launches detached); the admin UI polls
+    `update_status()` to follow progress.
+    """
+    try:
+        result = subprocess.run(
+            ["/usr/bin/systemctl", "start", "--no-block", "bluebird-update.service"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        return False, f"systemctl failed: {exc}"
+    if result.returncode != 0:
+        return False, (result.stderr.strip() or "could not start update unit")
+    return True, "Update started — polling for status."
+
+
+def update_status(log_lines: int = 80) -> dict:
+    """Snapshot the update service's current state for the admin UI.
+
+    Returns:
+        {
+          "state": "active" | "inactive" | "failed" | "activating" | "unknown",
+          "log": str,   # last `log_lines` of journal output from bluebird-update
+        }
+    """
+    try:
+        active = subprocess.run(
+            ["/usr/bin/systemctl", "is-active", "bluebird-update.service"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return {"state": "unknown", "log": "systemctl unavailable"}
+
+    state = (active.stdout or active.stderr).strip() or "unknown"
+
+    try:
+        logs = subprocess.run(
+            [
+                "/usr/bin/journalctl",
+                "-u", "bluebird-update.service",
+                "-n", str(max(20, min(500, int(log_lines)))),
+                "--no-pager",
+                "-o", "cat",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        return {"state": state, "log": f"journalctl failed: {exc}"}
+
+    return {"state": state, "log": logs.stdout or ""}
+
+
 def factory_reset() -> tuple[bool, str]:
     """Drop the device back into first-boot state without reflashing.
 
