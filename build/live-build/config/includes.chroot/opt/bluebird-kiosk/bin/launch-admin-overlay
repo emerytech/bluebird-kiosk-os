@@ -14,6 +14,8 @@ exec /usr/bin/chromium \
   --no-first-run \
   --noerrdialogs \
   --password-store=basic \
+  --incognito \
+  --disable-features=PasswordManager,AutofillServerCommunication,AutofillPasswordGeneration \
   --user-data-dir=/var/lib/bluebird-kiosk/admin-chromium \
   --window-size=800,1000 \
   --app="http://127.0.0.1:7311/admin"

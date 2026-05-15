@@ -19,10 +19,28 @@ async function api(path, opts = {}) {
   return r;
 }
 
+function clearPinField() {
+  const el = document.getElementById('login-pin');
+  if (!el) return;
+  el.value = '';
+  // Chromium sometimes re-fills after a render tick; clear again on the
+  // next event-loop frame to defeat that.
+  setTimeout(() => { try { el.value = ''; } catch (e) {} }, 50);
+  setTimeout(() => { try { el.value = ''; } catch (e) {} }, 250);
+}
+
 function showLogin() {
   document.getElementById('login').style.display = 'block';
   document.getElementById('panels').style.display = 'none';
+  clearPinField();
 }
+
+// Clear the PIN field whenever the page becomes visible again — covers the
+// "user dismissed admin overlay and reopened it via gesture" case.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') clearPinField();
+});
+window.addEventListener('pageshow', clearPinField);
 
 function showPanels() {
   document.getElementById('login').style.display = 'none';
