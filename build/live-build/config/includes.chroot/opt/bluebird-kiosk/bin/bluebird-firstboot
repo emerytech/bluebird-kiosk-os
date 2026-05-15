@@ -24,6 +24,7 @@ done
 
 exec /usr/bin/chromium \
   --kiosk \
+  --ozone-platform=wayland \
   --noerrdialogs \
   --no-first-run \
   --disable-pinch \

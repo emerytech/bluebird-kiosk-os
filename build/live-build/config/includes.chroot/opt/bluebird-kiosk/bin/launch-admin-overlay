@@ -10,6 +10,7 @@
 set -eu
 
 exec /usr/bin/chromium \
+  --ozone-platform=wayland \
   --new-window \
   --no-first-run \
   --noerrdialogs \

@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import re
 import secrets
+import shlex
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -54,12 +55,15 @@ def read_config() -> Dict[str, str]:
 
 
 def write_config(values: Dict[str, str]) -> None:
-    """Atomically write kiosk.conf with the merged values."""
+    """Atomically write kiosk.conf with the merged values. Values are
+    shell-quoted so they're safe to `source` from bash launchers running
+    under `set -eu` (e.g. a TENANT_NAME with a space would otherwise
+    split into two words and abort the launcher)."""
     merged = read_config()
     merged.update({k: ("" if v is None else str(v)) for k, v in values.items()})
     lines = ["# BlueBird Kiosk OS — runtime configuration (written by control plane)\n"]
     for key, value in merged.items():
-        lines.append(f"{key}={value}\n")
+        lines.append(f"{key}={shlex.quote(value)}\n")
     tmp = CONF_PATH.with_suffix(".tmp")
     tmp.write_text("".join(lines), encoding="utf-8")
     tmp.replace(CONF_PATH)
