@@ -135,6 +135,23 @@ async function restartKiosk() {
   toast(r.message, r.ok ? 'success' : 'error');
 }
 
+async function returnToKiosk() {
+  // Send the request without waiting on the response — the server will
+  // close this Chromium process as part of the call, which kills the
+  // socket before a response can come back. fetch().catch() swallows the
+  // resulting network error so we don't show a confusing toast.
+  const btn = document.getElementById('btn-return-to-kiosk');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Returning to kiosk…';
+  }
+  try {
+    await api('/admin/kiosk/return-to-kiosk', { method: 'POST' });
+  } catch (e) {
+    // Expected: the admin window is being torn down server-side.
+  }
+}
+
 async function changeSlug() {
   const slug = prompt('New school slug:');
   if (!slug) return;
@@ -263,6 +280,7 @@ document.querySelectorAll('.tabs button').forEach((b) =>
 );
 document.getElementById('btn-disp-apply').addEventListener('click', applyDisplay);
 document.getElementById('btn-kiosk-restart').addEventListener('click', restartKiosk);
+document.getElementById('btn-return-to-kiosk').addEventListener('click', returnToKiosk);
 document.getElementById('btn-kiosk-slug').addEventListener('click', changeSlug);
 document.getElementById('btn-sys-reboot').addEventListener('click', rebootSystem);
 document.getElementById('btn-sys-shutdown').addEventListener('click', shutdownSystem);

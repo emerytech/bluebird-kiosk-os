@@ -438,6 +438,21 @@ def create_app() -> FastAPI:
         ok, msg = system.restart_kiosk()
         return JSONResponse({"ok": ok, "message": msg})
 
+    @app.post("/admin/kiosk/return-to-kiosk", dependencies=[Depends(require_admin)])
+    async def admin_return_to_kiosk():
+        """One-click recovery / dismissal action used by the admin overlay:
+        relaunch the slideshow Chromium window (fixes a stuck blank page)
+        AND close the admin overlay window the user is sitting in. Fire
+        the reload first so the slideshow is up before the overlay closes
+        and our HTTP connection to the admin server dies."""
+        reload_ok, reload_msg = system.reload_kiosk_display()
+        # Best-effort close; ignore the result since the response will
+        # die mid-flight when our own Chromium process is killed.
+        system.close_admin_overlay()
+        return JSONResponse(
+            {"ok": reload_ok, "reload": reload_msg, "overlay_closed": True}
+        )
+
     @app.post("/admin/kiosk/slug", dependencies=[Depends(require_admin)])
     async def admin_kiosk_slug(body: SlugBody):
         cfg = config.read_config()

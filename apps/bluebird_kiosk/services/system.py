@@ -6,9 +6,10 @@ build/live-build/config/includes.chroot/etc/polkit-1/rules.d/bluebird-kiosk.rule
 """
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 
 def restart_kiosk() -> tuple[bool, str]:
@@ -133,6 +134,88 @@ def update_status(log_lines: int = 80) -> dict:
         return {"state": state, "log": f"journalctl failed: {exc}"}
 
     return {"state": state, "log": logs.stdout or ""}
+
+
+def _find_sway_socket() -> Optional[str]:
+    """Locate the running sway IPC socket. Sway writes it to
+    /run/user/<uid>/sway-ipc.<uid>.<pid>.sock on session start.
+
+    Returns the first match or None if sway isn't running. We deliberately
+    don't cache the answer — a sway restart will move the socket.
+    """
+    import glob
+    import os as _os
+    uid = _os.getuid()
+    candidates = sorted(
+        glob.glob(f"/run/user/{uid}/sway-ipc.{uid}.*.sock"),
+        key=lambda p: _os.path.getmtime(p),
+        reverse=True,
+    )
+    return candidates[0] if candidates else None
+
+
+def reload_kiosk_display() -> tuple[bool, str]:
+    """Kill the currently-running kiosk Chromium window and ask sway to
+    spawn a fresh one. Recovers from a blank or otherwise-stuck slideshow
+    without needing a full reboot.
+
+    Two pieces:
+      1. pkill the chromium process whose argv contains the kiosk URL.
+         Targets only the kiosk window (admin overlay has a different URL).
+      2. swaymsg `exec /opt/bluebird-kiosk/bin/launch-kiosk-chromium` —
+         relaunch inside the sway session so the new window has a display.
+
+    Both pieces are best-effort; failures are reported but don't roll back.
+    """
+    sway_sock = _find_sway_socket()
+    if sway_sock is None:
+        return False, "sway session not found — is the kiosk in graphical mode?"
+    env = {**os.environ, "SWAYSOCK": sway_sock}
+
+    # Step 1: kill the kiosk Chromium. Match on the URL since both kiosk and
+    # admin Chromium have similar argv otherwise.
+    try:
+        subprocess.run(
+            ["/usr/bin/pkill", "-f",
+             r"chromium.*--app=http://127.0.0.1:.*legacy-wall"],
+            check=False, env=env, timeout=5,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    # Step 2: re-exec the launcher inside sway. swaymsg lives in the sway
+    # package which is always installed on a kiosk.
+    try:
+        result = subprocess.run(
+            ["/usr/bin/swaymsg", "exec",
+             "/opt/bluebird-kiosk/bin/launch-kiosk-chromium"],
+            env=env, capture_output=True, text=True,
+            check=False, timeout=5,
+        )
+    except FileNotFoundError as exc:
+        return False, f"swaymsg missing: {exc}"
+    except subprocess.TimeoutExpired:
+        return False, "swaymsg timed out"
+    if result.returncode != 0:
+        return False, (result.stderr.strip() or "swaymsg failed")
+    return True, "Kiosk display relaunched."
+
+
+def close_admin_overlay() -> tuple[bool, str]:
+    """Kill the admin overlay Chromium window. Identified by its
+    --user-data-dir which is unique to the admin Chromium instance
+    (see launch-admin-overlay)."""
+    try:
+        result = subprocess.run(
+            ["/usr/bin/pkill", "-f",
+             r"chromium.*--user-data-dir=/var/lib/bluebird-kiosk/admin-chromium"],
+            check=False, capture_output=True, text=True, timeout=5,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        return False, f"pkill failed: {exc}"
+    # pkill returns 1 when no processes matched — that's not an error here
+    # (admin overlay may already be closed).
+    return True, "Admin overlay closed."
 
 
 def list_diagnostics_for_console() -> list:
