@@ -319,7 +319,7 @@ BACKEND_FOR_VERSION="$(
     # shellcheck disable=SC1091
     source /etc/bluebird/kiosk.conf 2>/dev/null || true
   fi
-  printf '%s' "${BLUEBIRD_BACKEND:-https://bluebirdalerts.com}"
+  printf '%s' "${BLUEBIRD_BACKEND:-https://bluebird-alerts.com}"
 )"
 log "recording installed version (from ${BACKEND_FOR_VERSION})"
 VERSION_JSON="$(curl -fsSL --max-time 10 \

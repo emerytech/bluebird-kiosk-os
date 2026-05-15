@@ -21,11 +21,14 @@ LICENSE_TOKEN_PATH = Path(
 _KV_RE = re.compile(r"^([A-Z_][A-Z0-9_]*)=(.*)$")
 
 _DEFAULTS: Dict[str, str] = {
-    # Canonical no-dash domain. The dashed bluebird-alerts.com still works
-    # via a 308 redirect, but defaulting to the canonical one shaves a
-    # round-trip on every API call and avoids client edge cases that
-    # mishandle redirects on POST.
-    "BLUEBIRD_BACKEND": "https://bluebirdalerts.com",
+    # Dashed bluebird-alerts.com is the safer default because that's the
+    # domain school IT departments historically whitelisted in their
+    # content filters. The canonical bluebirdalerts.com is what the
+    # backend actually answers from, reached via a 308 redirect — clients
+    # using curl -L / Python requests follow it transparently. Operators
+    # on a network that prefers the canonical host can edit
+    # BLUEBIRD_BACKEND in /etc/bluebird/kiosk.conf.
+    "BLUEBIRD_BACKEND": "https://bluebird-alerts.com",
     "SCHOOL_SLUG": "",
     "LEGACY_WALL_URL": "",
     "DEVICE_ID": "",

@@ -5,7 +5,7 @@
 # include `EnvironmentFile=/etc/bluebird/kiosk.conf`.
 
 # Backend root URL — almost always the production BlueBird host.
-BLUEBIRD_BACKEND=https://bluebirdalerts.com
+BLUEBIRD_BACKEND=https://bluebird-alerts.com
 
 # School slug, set by the first-boot wizard.
 SCHOOL_SLUG=
