@@ -1,48 +1,37 @@
 #!/usr/bin/env bash
-# Launch Chromium pointed at the local Legacy Wall renderer.
+# Launch Chromium pointed at the Legacy Wall.
 #
-# Phase 3 of the kiosk-v2 local-cache effort: instead of pointing at the
-# cloud URL (which fails when the kiosk's internet is down), we point at
-# the on-device control plane at 127.0.0.1:7311/legacy-wall. That page
-# reads from KioskLocalCache, which the sync service keeps current.
+# URL selection (in order):
+#   1. KIOSK_URL env override (explicit operator escape hatch)
+#   2. LEGACY_WALL_URL from /etc/bluebird/kiosk.conf, reachable     ← preferred:
+#      visual parity with the cloud Legacy Wall (sidebar, collections,
+#      lightbox, idle slideshow, etc).
+#   3. http://127.0.0.1:7311/legacy-wall (local renderer fed by the
+#      kiosk-side sync cache — used when the kiosk has no internet).
 #
-# Override path:
-#   KIOSK_URL=https://bluebird-alerts.com/foo/legacy-wall launch-kiosk-chromium
-# falls back to the cloud URL if someone explicitly asks for it.
+# The local fallback is intentionally minimal: it shows a slideshow of
+# already-synced media. Most schools will see the cloud version; the
+# fallback only kicks in for a kiosk that lost WAN since boot.
 set -eu
 
 CONF=/etc/bluebird/kiosk.conf
 ADMIN_PORT=7311
-URL="http://127.0.0.1:${ADMIN_PORT}/legacy-wall"
+LOCAL_URL="http://127.0.0.1:${ADMIN_PORT}/legacy-wall"
+CLOUD_URL=""
 
-if [[ -f "$CONF" ]]; then
-  # shellcheck disable=SC1091
-  source "$CONF"
-  if [[ -n "${ADMIN_PORT:-}" ]]; then
-    URL="http://127.0.0.1:${ADMIN_PORT}/legacy-wall"
-  fi
-fi
+# shellcheck disable=SC1091
+[[ -f "$CONF" ]] && source "$CONF"
 
-# Pre-configuration: if the firstboot wizard hasn't completed yet, the
-# /legacy-wall route still works but shows the "Waiting for content" state.
-# A friendlier path is to send Chromium to the wizard surface directly. But
-# the gesture/launcher logic already handles that — this script only runs
-# in post-configured mode.
+# kiosk.conf may override ADMIN_PORT — recompute the local URL after sourcing.
+LOCAL_URL="http://127.0.0.1:${ADMIN_PORT}/legacy-wall"
+CLOUD_URL="${LEGACY_WALL_URL:-}"
 
-# Allow an explicit env override (e.g. for cloud fallback testing).
-if [[ -n "${KIOSK_URL:-}" ]]; then
-  URL="$KIOSK_URL"
-fi
-
-# Wait for bluebird-admin.service to be reachable before launching Chromium.
-# Without this, sway's `exec` fires Chromium immediately on session start —
-# faster than systemd brings up the FastAPI server — and Chromium ends up
-# stuck on a "connection refused" page (no URL bar in --kiosk to recover).
-# Skip the wait if the URL is an explicit cloud override.
-if [[ "$URL" == http://127.0.0.1:* ]]; then
-  HEALTH="http://127.0.0.1:${ADMIN_PORT}/_health"
-  for _ in $(seq 1 90); do
-    if /usr/bin/python3 -c "
+# Wait for the local admin server first — needed either way (local
+# renderer + diagnostic console). Without this wait, Chromium can fire
+# before FastAPI binds and end up on a connection-refused error page.
+HEALTH="http://127.0.0.1:${ADMIN_PORT}/_health"
+for _ in $(seq 1 90); do
+  if /usr/bin/python3 -c "
 import sys, urllib.request
 try:
     r = urllib.request.urlopen('$HEALTH', timeout=1)
@@ -50,10 +39,38 @@ try:
 except Exception:
     sys.exit(1)
 " 2>/dev/null; then
-      break
-    fi
-    sleep 1
-  done
+    break
+  fi
+  sleep 1
+done
+
+# Probe the cloud URL with a short timeout. If reachable, use it for
+# visual parity. If not (DNS failure, WAN down, cert error, etc.), fall
+# back to the local renderer.
+URL="$LOCAL_URL"
+if [[ -n "$CLOUD_URL" ]]; then
+  # Use a real-browser UA — Cloudflare/modsecurity in front of the
+  # backend returns 403 to bare `Python-urllib/X.Y` requests, which
+  # would mis-classify a healthy cloud as unreachable.
+  if /usr/bin/python3 -c "
+import sys, urllib.request
+req = urllib.request.Request(
+    '$CLOUD_URL',
+    headers={'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 BlueBirdKioskProbe'}
+)
+try:
+    r = urllib.request.urlopen(req, timeout=4)
+    sys.exit(0 if r.status == 200 else 1)
+except Exception:
+    sys.exit(1)
+" 2>/dev/null; then
+    URL="$CLOUD_URL"
+  fi
+fi
+
+# Explicit operator override wins over everything else.
+if [[ -n "${KIOSK_URL:-}" ]]; then
+  URL="$KIOSK_URL"
 fi
 
 exec /usr/bin/chromium \
