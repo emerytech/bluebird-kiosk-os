@@ -174,6 +174,7 @@ rsync -a --delete "$KIOSK_OS/apps/bluebird_gesture/" /opt/bluebird-kiosk/src/blu
 # ── Drop /etc and /opt files ─────────────────────────────────────────────────
 log "installing systemd units"
 install -m 0644 "$LIVE_BUILD_INC"/etc/systemd/system/bluebird-*.service \
+                "$LIVE_BUILD_INC"/etc/systemd/system/bluebird-*.timer \
                 "$LIVE_BUILD_INC"/etc/systemd/system/bluebird-*.target \
                 /etc/systemd/system/
 
@@ -271,6 +272,13 @@ systemctl enable bluebird-admin.service
 systemctl enable bluebird-gesture.service
 systemctl enable bluebird-heartbeat.service
 systemctl enable bluebird-kiosk-sync.service
+# Periodic auto-update check (every 6h, jittered 0-15min). The service it
+# fires (bluebird-update.service) is itself NOT enabled — only triggered
+# on demand by the timer or by the admin overlay's "Check for updates"
+# button. Both paths go through bluebird-update which only runs install
+# if the remote version differs from /etc/bluebird/kiosk-os.version, so
+# the typical 6h tick is a cheap no-op.
+systemctl enable bluebird-update.timer
 systemctl enable unattended-upgrades.service
 systemctl set-default bluebird-kiosk.target
 # bluebird-kiosk.service and bluebird-firstboot.service are NOT enabled.
@@ -298,6 +306,24 @@ EOF
   passwd -l root || true
 else
   warn "debug mode: VT switching, root, ssh, and getty@tty[2-6] left as-is"
+fi
+
+# ── Record installed version ─────────────────────────────────────────────────
+# Stamp /etc/bluebird/kiosk-os.version with whatever the server currently
+# advertises so the first auto-update tick is a no-op. Failure here is
+# non-fatal (auto-update will re-detect on next tick and just self-heal).
+BACKEND_FOR_VERSION="$(grep -E '^BLUEBIRD_BACKEND=' /etc/bluebird/kiosk.conf 2>/dev/null \
+  | head -n1 | cut -d= -f2- | tr -d '"'"'"' || true)"
+BACKEND_FOR_VERSION="${BACKEND_FOR_VERSION:-https://bluebird-alerts.com}"
+log "recording installed version (from ${BACKEND_FOR_VERSION})"
+if RECORDED_VERSION="$(curl -fsSL --max-time 10 "${BACKEND_FOR_VERSION}/api/public/kiosk-os/version" 2>/dev/null \
+    | /usr/bin/python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("version",""))
+except Exception: pass' 2>/dev/null)" && [[ -n "$RECORDED_VERSION" ]]; then
+  printf '%s\n' "$RECORDED_VERSION" > /etc/bluebird/kiosk-os.version
+  log "  installed version: $RECORDED_VERSION"
+else
+  warn "  could not fetch version from server — auto-update will reconcile on first tick"
 fi
 
 # ── Done ─────────────────────────────────────────────────────────────────────

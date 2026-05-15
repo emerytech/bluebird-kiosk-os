@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# BlueBird Kiosk OS — version-aware updater.
+#
+# Called by:
+#   • bluebird-update.service (manual trigger from admin overlay)
+#   • bluebird-update.timer  → bluebird-update.service (every 6h)
+#
+# Logic:
+#   1. GET /api/public/kiosk-os/version → REMOTE_VERSION
+#   2. Compare to /etc/bluebird/kiosk-os.version (LOCAL_VERSION)
+#   3. If same → exit 0 (no-op, cheap)
+#   4. If different → run install-kiosk.sh, then record the new version
+#
+# The version is a 16-char hex hash of the kiosk-os/ tree shipped from the
+# BlueBird server, so it changes on every kiosk-os commit. Re-running this
+# script is safe (idempotent) — install.sh itself preserves config + state.
+set -euo pipefail
+
+BASE="${BLUEBIRD_BACKEND:-https://bluebird-alerts.com}"
+VERSION_FILE="/etc/bluebird/kiosk-os.version"
+VERSION_URL="${BASE}/api/public/kiosk-os/version"
+BOOTSTRAP_URL="${BASE}/api/public/install-kiosk.sh"
+
+log()  { printf '[bluebird-update] %s\n' "$*"; }
+
+# Fetch the remote version. Allow a few retries — the kiosk's WiFi
+# may be reconnecting during the 6 h tick window.
+REMOTE_VERSION=""
+for _ in 1 2 3; do
+    REMOTE_VERSION="$(curl -fsSL --max-time 10 "$VERSION_URL" 2>/dev/null \
+        | /usr/bin/python3 -c '
+import json, sys
+try:
+    print(json.load(sys.stdin).get("version", ""))
+except Exception:
+    pass
+' || true)"
+    [[ -n "$REMOTE_VERSION" ]] && break
+    sleep 5
+done
+
+if [[ -z "$REMOTE_VERSION" ]]; then
+    log "could not reach $VERSION_URL — skipping this tick"
+    exit 0
+fi
+
+LOCAL_VERSION="$(cat "$VERSION_FILE" 2>/dev/null || echo "none")"
+
+log "remote=$REMOTE_VERSION local=$LOCAL_VERSION"
+
+if [[ "$REMOTE_VERSION" == "$LOCAL_VERSION" ]]; then
+    log "already current; no update needed"
+    exit 0
+fi
+
+log "update available — fetching install bootstrap"
+TMP="$(mktemp /tmp/bluebird-install-XXXXXX.sh)"
+trap 'rm -f "$TMP"' EXIT
+
+curl -fsSL --max-time 30 "$BOOTSTRAP_URL" -o "$TMP" \
+    || { log "could not download $BOOTSTRAP_URL"; exit 1; }
+
+log "applying update via install-kiosk.sh"
+bash "$TMP"
+
+# Record the new version only after install completes successfully —
+# install.sh is `set -e`, so if anything fails above this point the
+# version file stays at the old value and the next tick retries.
+install -d -m 0755 "$(dirname "$VERSION_FILE")"
+echo "$REMOTE_VERSION" > "$VERSION_FILE"
+log "version recorded: $REMOTE_VERSION"

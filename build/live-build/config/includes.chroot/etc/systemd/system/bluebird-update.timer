@@ -1,0 +1,16 @@
+[Unit]
+Description=BlueBird Kiosk OS — periodic auto-update check
+PartOf=bluebird-kiosk.target
+
+[Timer]
+# Fire 5 minutes after boot, then every 6 hours. The OnBootSec catches
+# kiosks that were offline when the previous timer would have fired.
+OnBootSec=5min
+OnUnitActiveSec=6h
+# Randomize within a 15-minute window so a fleet of kiosks doesn't all
+# hit the version endpoint at the same instant.
+RandomizedDelaySec=900
+Unit=bluebird-update.service
+
+[Install]
+WantedBy=bluebird-kiosk.target
