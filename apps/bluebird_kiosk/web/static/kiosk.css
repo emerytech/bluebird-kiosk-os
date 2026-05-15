@@ -359,3 +359,69 @@ label {
 .toast.show { opacity: 1; }
 .toast.success { border-color: var(--bb-success); }
 .toast.error { border-color: var(--bb-danger); }
+
+/* ── Admin overlay PIN keypad ───────────────────────────────────────────────
+ * Matches the cloud Legacy Wall kiosk PIN UX so muscle memory transfers
+ * between the two surfaces. Shuffled digit positions on every open prevent
+ * shoulder-surfing of the typed pattern.
+ */
+.pin-card {
+  max-width: 360px;
+  margin: 0 auto;
+  padding: 28px 24px 24px;
+}
+.pin-title {
+  font-size: 20px;
+  font-weight: 600;
+  text-align: center;
+  margin-bottom: 4px;
+}
+.pin-sub {
+  font-size: 13px;
+  color: var(--bb-muted);
+  text-align: center;
+  margin-bottom: 22px;
+}
+.pin-dots {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  margin-bottom: 22px;
+}
+.pin-card .pin-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgba(148, 163, 184, 0.25);
+  border: none;
+  transition: background 0.15s;
+}
+.pin-card .pin-dot.filled { background: var(--bb-blue-light); }
+.pin-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+.pin-key {
+  background: rgba(30, 41, 59, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 12px;
+  color: #e2e8f0;
+  font-size: 1.5rem;
+  font-weight: 600;
+  padding: 22px 0;
+  cursor: pointer;
+  text-align: center;
+  transition: background 0.1s;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.pin-key:active { background: rgba(96, 165, 250, 0.25); }
+.pin-key.action { font-size: 1rem; color: var(--bb-muted); }
+.pin-err {
+  color: #fca5a5;
+  font-size: 0.85rem;
+  text-align: center;
+  min-height: 22px;
+  margin-top: 14px;
+}

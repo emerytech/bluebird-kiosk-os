@@ -19,28 +19,128 @@ async function api(path, opts = {}) {
   return r;
 }
 
-function clearPinField() {
-  const el = document.getElementById('login-pin');
-  if (!el) return;
-  el.value = '';
-  // Chromium sometimes re-fills after a render tick; clear again on the
-  // next event-loop frame to defeat that.
-  setTimeout(() => { try { el.value = ''; } catch (e) {} }, 50);
-  setTimeout(() => { try { el.value = ''; } catch (e) {} }, 250);
+// ── Shuffled-keypad PIN entry ───────────────────────────────────────────────
+// Mirrors the cloud Legacy Wall kiosk PIN UX: 6 dots, 3-column grid, digits
+// reshuffled on every open. Auto-submits at 6 chars. No text input means no
+// Chromium autofill to fight.
+
+let _pinVal = '';
+let _pinSubmitting = false;
+
+function pinShuffleGrid() {
+  const grid = document.getElementById('pin-grid');
+  if (!grid) return;
+  const digits = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+  // Fisher–Yates shuffle.
+  for (let i = digits.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [digits[i], digits[j]] = [digits[j], digits[i]];
+  }
+  let html = '';
+  for (let k = 0; k < 10; k++) {
+    const d = digits[k];
+    if (k === 9) {
+      // Bottom row: Cancel · last-digit · Backspace
+      html += '<button class="pin-key action" data-act="cancel">Cancel</button>';
+      html += `<button class="pin-key" data-digit="${d}">${d}</button>`;
+      html += '<button class="pin-key action" data-act="back">⌫</button>';
+    } else {
+      html += `<button class="pin-key" data-digit="${d}">${d}</button>`;
+    }
+  }
+  grid.innerHTML = html;
+  grid.querySelectorAll('[data-digit]').forEach(b => {
+    b.addEventListener('click', () => pinDigit(b.dataset.digit));
+  });
+  grid.querySelectorAll('[data-act="back"]').forEach(b => {
+    b.addEventListener('click', pinBack);
+  });
+  grid.querySelectorAll('[data-act="cancel"]').forEach(b => {
+    b.addEventListener('click', pinCancel);
+  });
+}
+
+function pinUpdateDots() {
+  for (let i = 0; i < 6; i++) {
+    const dot = document.getElementById('pd-' + i);
+    if (dot) dot.classList.toggle('filled', i < _pinVal.length);
+  }
+}
+
+function pinClear() {
+  _pinVal = '';
+  _pinSubmitting = false;
+  const err = document.getElementById('pin-err');
+  if (err) err.textContent = '';
+  pinUpdateDots();
+  pinShuffleGrid();
+}
+
+function pinDigit(d) {
+  if (_pinSubmitting || _pinVal.length >= 6) return;
+  _pinVal += String(d);
+  pinUpdateDots();
+  if (_pinVal.length >= 6) {
+    pinAutoSubmit();
+  }
+}
+
+function pinBack() {
+  if (_pinSubmitting) return;
+  _pinVal = _pinVal.slice(0, -1);
+  pinUpdateDots();
+  const err = document.getElementById('pin-err');
+  if (err) err.textContent = '';
+}
+
+function pinCancel() {
+  pinClear();
+}
+
+async function pinAutoSubmit() {
+  if (_pinSubmitting) return;
+  _pinSubmitting = true;
+  const err = document.getElementById('pin-err');
+  if (err) err.textContent = '';
+  try {
+    const r = await fetch('/admin/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: _pinVal }),
+    });
+    const body = await r.json();
+    if (!r.ok || !body.ok) {
+      if (body.error === 'locked_out') {
+        if (err) err.textContent = `Locked out for ${body.retry_after_seconds}s.`;
+      } else {
+        if (err) err.textContent = 'Invalid PIN.';
+      }
+      // Reshuffle on failure so the user can't lean on muscle memory.
+      pinClear();
+      return;
+    }
+    sessionToken = body.session_token;
+    pinClear();
+    showPanels();
+  } catch (e) {
+    if (err) err.textContent = 'Network error.';
+    pinClear();
+  }
 }
 
 function showLogin() {
   document.getElementById('login').style.display = 'block';
   document.getElementById('panels').style.display = 'none';
-  clearPinField();
+  pinClear();
 }
 
-// Clear the PIN field whenever the page becomes visible again — covers the
-// "user dismissed admin overlay and reopened it via gesture" case.
+// Re-shuffle whenever the page regains focus — covers the "user dismissed
+// the admin overlay and reopened it" case so the keypad layout is fresh
+// every time.
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') clearPinField();
+  if (document.visibilityState === 'visible') pinClear();
 });
-window.addEventListener('pageshow', clearPinField);
+window.addEventListener('pageshow', pinClear);
 
 function showPanels() {
   document.getElementById('login').style.display = 'none';
@@ -61,27 +161,8 @@ function setTab(name) {
   if (name === 'kiosk') loadKiosk();
 }
 
-async function login() {
-  const pin = document.getElementById('login-pin').value;
-  if (pin.length !== 6) return toast('PIN must be 6 digits.', 'error');
-  const r = await fetch('/admin/login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pin }),
-  });
-  const body = await r.json();
-  if (!r.ok || !body.ok) {
-    if (body.error === 'locked_out') {
-      toast(`Locked out for ${body.retry_after_seconds}s.`, 'error');
-    } else {
-      toast('Invalid PIN.', 'error');
-    }
-    return;
-  }
-  sessionToken = body.session_token;
-  document.getElementById('login-pin').value = '';
-  showPanels();
-}
+// Old login() / btn-login / login-pin removed — the shuffled keypad
+// auto-submits via pinAutoSubmit() above.
 
 async function loadNetwork() {
   const list = document.getElementById('net-list');
@@ -292,7 +373,6 @@ async function pollUpdateStatus() {
   }
 }
 
-document.getElementById('btn-login').addEventListener('click', login);
 document.querySelectorAll('.tabs button').forEach((b) =>
   b.addEventListener('click', () => setTab(b.dataset.tab))
 );

@@ -16,23 +16,19 @@
       </div>
     </header>
 
-    <section id="login" class="card">
-      <h2>Enter admin PIN</h2>
-      <p>This panel is for device troubleshooting only. Tap the screen with five fingers to exit.</p>
-      <!-- autocomplete="off" + name="device-admin-pin" + the JS load-time
-           clear below all combine to defeat Chromium's form-history
-           autofill. Without this the PIN persists across overlay
-           sessions, which is both a leak and bad UX. -->
-      <form autocomplete="off" onsubmit="event.preventDefault();">
-        <input id="login-pin" type="password" inputmode="numeric"
-               maxlength="6" placeholder="● ● ● ● ● ●"
-               name="device-admin-pin"
-               autocomplete="off"
-               data-lpignore="true"
-               data-1p-ignore="true"
-               data-form-type="other">
-        <div style="margin-top:16px"><button id="btn-login">Unlock</button></div>
-      </form>
+    <section id="login" class="card pin-card">
+      <div class="pin-title">🔒 Admin Mode</div>
+      <div class="pin-sub">Enter your device PIN to continue</div>
+      <div class="pin-dots" id="pin-dots">
+        <div class="pin-dot" id="pd-0"></div>
+        <div class="pin-dot" id="pd-1"></div>
+        <div class="pin-dot" id="pd-2"></div>
+        <div class="pin-dot" id="pd-3"></div>
+        <div class="pin-dot" id="pd-4"></div>
+        <div class="pin-dot" id="pd-5"></div>
+      </div>
+      <div class="pin-grid" id="pin-grid"><!-- keypad rendered by JS --></div>
+      <div class="pin-err" id="pin-err"></div>
     </section>
 
     <section id="panels" style="display:none">
