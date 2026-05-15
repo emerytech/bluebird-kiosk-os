@@ -16,7 +16,12 @@ RestartSec=2
 NoNewPrivileges=yes
 ProtectSystem=strict
 ReadWritePaths=/etc/bluebird /var/lib/bluebird-kiosk
-ProtectHome=yes
+# ProtectHome=yes would hide /run/user/<uid>, which breaks
+# `swaymsg` integration — sway's IPC socket lives there and the
+# admin server needs to send `exec` messages to spawn the kiosk
+# overlay window. We leave /home + /root visible too; the user
+# `bluebird-kiosk` has no $HOME beyond /var/lib/bluebird-kiosk.
+ProtectHome=no
 PrivateTmp=yes
 
 [Install]

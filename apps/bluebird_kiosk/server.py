@@ -438,6 +438,54 @@ def create_app() -> FastAPI:
         ok, msg = system.restart_kiosk()
         return JSONResponse({"ok": ok, "message": msg})
 
+    # ── Cross-origin entry point for the cloud Legacy Wall ──────────────────
+    #
+    # The cloud Legacy Wall (https://bluebirdalerts.com/<slug>/legacy-wall),
+    # running in the kiosk Chromium window, exposes a "Kiosk Settings"
+    # button in its settings menu when:
+    #   1. its admin-mode PIN gate is active, AND
+    #   2. its window's User-Agent contains "BlueBirdKiosk" (set by our
+    #      Chromium launcher).
+    #
+    # Clicking it POSTs here. We don't reuse `require_admin` because the
+    # local admin cookie is bound to the loopback origin and the request
+    # crosses origins. The launched overlay has its own PIN gate, so the
+    # surface this exposes to a (hypothetical) cross-origin attacker is
+    # "the same thing that a 5-finger gesture or Ctrl+Alt+B would do" —
+    # i.e. open a PIN prompt. CORS is locked to the canonical cloud host.
+    _CORS_ORIGINS = {
+        "https://bluebirdalerts.com",
+        "https://www.bluebirdalerts.com",
+        "https://bluebird-alerts.com",
+        "https://www.bluebird-alerts.com",
+    }
+
+    def _cors_headers(request: Request) -> Dict[str, str]:
+        origin = (request.headers.get("origin") or "").lower()
+        if origin in _CORS_ORIGINS:
+            return {
+                "Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Methods": "POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type",
+                "Access-Control-Max-Age": "600",
+                "Vary": "Origin",
+            }
+        return {}
+
+    @app.options("/admin/kiosk/open-overlay")
+    async def admin_open_overlay_preflight(request: Request):
+        return JSONResponse({"ok": True}, headers=_cors_headers(request))
+
+    @app.post("/admin/kiosk/open-overlay")
+    async def admin_open_overlay(request: Request):
+        ok, msg = system.open_admin_overlay()
+        status = 200 if ok else 500
+        return JSONResponse(
+            {"ok": ok, "message": msg},
+            status_code=status,
+            headers=_cors_headers(request),
+        )
+
     @app.post("/admin/kiosk/return-to-kiosk", dependencies=[Depends(require_admin)])
     async def admin_return_to_kiosk():
         """One-click recovery / dismissal action used by the admin overlay:

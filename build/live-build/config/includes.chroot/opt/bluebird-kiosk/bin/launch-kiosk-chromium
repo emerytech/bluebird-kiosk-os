@@ -73,6 +73,14 @@ if [[ -n "${KIOSK_URL:-}" ]]; then
   URL="$KIOSK_URL"
 fi
 
+# Identify the Chromium window as a BlueBird kiosk so the cloud Legacy
+# Wall can offer kiosk-only affordances (e.g. opening the local admin
+# overlay from the settings menu). Real students on phones/desktops
+# never see this UA suffix.
+KIOSK_VERSION="$(cat /opt/bluebird-kiosk/VERSION 2>/dev/null || echo 0.0.0)"
+UA_SUFFIX="BlueBirdKiosk/${KIOSK_VERSION}"
+DEFAULT_UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
+
 exec /usr/bin/chromium \
   --kiosk \
   --ozone-platform=wayland \
@@ -85,4 +93,6 @@ exec /usr/bin/chromium \
   --check-for-update-interval=604800 \
   --start-fullscreen \
   --incognito \
+  --user-agent="${DEFAULT_UA} ${UA_SUFFIX}" \
+  --allow-running-insecure-content \
   --app="$URL"

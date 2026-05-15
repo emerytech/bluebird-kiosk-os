@@ -201,6 +201,33 @@ def reload_kiosk_display() -> tuple[bool, str]:
     return True, "Kiosk display relaunched."
 
 
+def open_admin_overlay() -> tuple[bool, str]:
+    """Ask sway to spawn the admin overlay Chromium window. Used by the
+    cloud Legacy Wall when an in-admin-mode user clicks "Kiosk Settings"
+    in the settings menu — same effect as the 5-finger gesture or
+    Ctrl+Alt+B. The overlay is PIN-gated by the local admin app, so
+    this entry point doesn't add a new privilege — it just exposes the
+    existing one to users on a touchscreen without the gesture habit."""
+    sway_sock = _find_sway_socket()
+    if sway_sock is None:
+        return False, "sway session not found — is the kiosk in graphical mode?"
+    env = {**os.environ, "SWAYSOCK": sway_sock}
+    try:
+        result = subprocess.run(
+            ["/usr/bin/swaymsg", "exec",
+             "/opt/bluebird-kiosk/bin/launch-admin-overlay"],
+            env=env, capture_output=True, text=True,
+            check=False, timeout=5,
+        )
+    except FileNotFoundError as exc:
+        return False, f"swaymsg missing: {exc}"
+    except subprocess.TimeoutExpired:
+        return False, "swaymsg timed out"
+    if result.returncode != 0:
+        return False, (result.stderr.strip() or "swaymsg failed")
+    return True, "Admin overlay opening."
+
+
 def close_admin_overlay() -> tuple[bool, str]:
     """Kill the admin overlay Chromium window. Identified by its
     --user-data-dir which is unique to the admin Chromium instance
