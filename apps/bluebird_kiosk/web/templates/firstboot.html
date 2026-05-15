@@ -61,6 +61,7 @@
             your school.
           </p>
           <input id="license-input" class="big-input license-input" type="text"
+                 data-osk="alphanum"
                  autocomplete="off" autocapitalize="characters" spellcheck="false"
                  placeholder="BB-XXXX-XXXX-XXXX" maxlength="20">
           <p class="hint" id="license-hint"></p>
@@ -136,8 +137,31 @@
     </main>
 
     <div id="toast" class="toast"></div>
+
+    <!-- WiFi password modal (replaces native prompt() which Chromium
+         --kiosk blocks). Sits hidden until connectWifi() shows it. -->
+    <div id="wifi-modal" class="modal-back" style="display:none;">
+      <div class="modal-card">
+        <h2 id="wifi-modal-title">Connect to network</h2>
+        <p class="modal-sub" id="wifi-modal-sub"></p>
+        <label for="wifi-password-input" style="display:block;font-size:12px;color:var(--bb-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Password</label>
+        <input id="wifi-password-input" class="big-input" type="password"
+               data-osk="qwerty"
+               autocomplete="off" autocapitalize="none" spellcheck="false"
+               placeholder="WiFi password">
+        <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:14px;color:var(--bb-muted);">
+          <input type="checkbox" id="wifi-password-show"> Show password
+        </label>
+        <p class="hint" id="wifi-modal-hint"></p>
+        <footer class="modal-actions">
+          <button id="btn-wifi-cancel" class="ghost">Cancel</button>
+          <button id="btn-wifi-connect" class="primary">Connect</button>
+        </footer>
+      </div>
+    </div>
   </div>
 
+  <script src="/static/osk.js"></script>
   <script src="/static/firstboot.js"></script>
 </body>
 </html>

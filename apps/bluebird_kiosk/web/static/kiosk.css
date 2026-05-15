@@ -425,3 +425,97 @@ label {
   min-height: 22px;
   margin-top: 14px;
 }
+
+/* ── On-screen keyboard (osk.js) ───────────────────────────────────────────
+ * Bottom-of-screen overlay that pops up when any input with a data-osk
+ * attribute gets focus. Touch-first sizing.
+ */
+.osk-root {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2000;
+  transform: translateY(100%);
+  transition: transform 0.18s ease-out;
+  pointer-events: none;
+}
+.osk-root.osk-open {
+  transform: translateY(0);
+  pointer-events: auto;
+}
+.osk-pane {
+  background: rgba(11, 20, 32, 0.97);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 10px 12px 14px;
+  box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.4);
+}
+.osk-row {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  margin-top: 6px;
+}
+.osk-row:first-child { margin-top: 0; }
+.osk-key {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 56px;
+  background: rgba(30, 41, 59, 0.95);
+  color: var(--bb-text, #f1f5f9);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 10px;
+  font-size: 1.2rem;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  font-family: inherit;
+}
+.osk-key:active { background: rgba(96, 165, 250, 0.3); }
+.osk-key-mod { flex: 0 0 90px; font-size: 1rem; }
+.osk-key-mod.on { background: var(--bb-blue, #2563eb); color: #fff; }
+.osk-space { flex: 0 1 320px; font-size: 0.95rem; }
+.osk-key-back, .osk-key-enter { flex: 0 0 90px; font-size: 1.3rem; }
+.osk-key-enter { background: var(--bb-blue, #2563eb); color: #fff; }
+.osk-row-bottom { margin-top: 10px; }
+
+/* Reserve space at page bottom when keyboard is open so the focused
+ * input isn't hidden under it. Tuned for a 4-row keyboard.
+ */
+body.osk-keyboard-open {
+  padding-bottom: 340px;
+}
+
+/* ── Modal (used by WiFi-password prompt replacement) ───────────────────── */
+.modal-back {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  z-index: 1500;
+  display: flex;
+  align-items: flex-start;  /* leave space at top so keyboard fits */
+  justify-content: center;
+  padding-top: 8vh;
+}
+.modal-card {
+  background: var(--bb-panel, #111c33);
+  border: 1px solid var(--bb-border, rgba(255,255,255,0.08));
+  border-radius: 16px;
+  padding: 28px;
+  max-width: 480px;
+  width: 90%;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.5);
+}
+.modal-card h2 { font-size: 22px; font-weight: 600; margin-bottom: 6px; }
+.modal-sub {
+  color: var(--bb-muted, #94a3b8);
+  font-size: 14px;
+  margin-bottom: 18px;
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}

@@ -128,10 +128,59 @@ function renderWifiList(list, networks) {
   }
 }
 
+// In-page WiFi-password modal — native prompt() is blocked by Chromium
+// --kiosk, so we render the input ourselves and feed it via the on-screen
+// keyboard widget defined in osk.js.
+function askWifiPassword(network) {
+  return new Promise((resolve) => {
+    const modal = document.getElementById('wifi-modal');
+    const input = document.getElementById('wifi-password-input');
+    const show = document.getElementById('wifi-password-show');
+    const sub = document.getElementById('wifi-modal-sub');
+    const hint = document.getElementById('wifi-modal-hint');
+    const btnOk = document.getElementById('btn-wifi-connect');
+    const btnCancel = document.getElementById('btn-wifi-cancel');
+
+    input.value = '';
+    input.type = 'password';
+    show.checked = false;
+    hint.textContent = '';
+    sub.textContent = `Network: ${network.ssid}`;
+    modal.style.display = 'flex';
+    // Defer focus so the OSK observer has a chance to bind the input.
+    setTimeout(() => { input.focus(); }, 30);
+
+    function cleanup() {
+      modal.style.display = 'none';
+      btnOk.removeEventListener('click', onOk);
+      btnCancel.removeEventListener('click', onCancel);
+      show.removeEventListener('change', onShow);
+      input.removeEventListener('keydown', onKey);
+    }
+    function onOk() {
+      const v = input.value;
+      if (!v) { hint.textContent = 'Password is required.'; return; }
+      cleanup();
+      resolve(v);
+    }
+    function onCancel() { cleanup(); resolve(null); }
+    function onShow() { input.type = show.checked ? 'text' : 'password'; }
+    function onKey(e) {
+      if (e.key === 'Enter') { e.preventDefault(); onOk(); }
+      else if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+    }
+
+    btnOk.addEventListener('click', onOk);
+    btnCancel.addEventListener('click', onCancel);
+    show.addEventListener('change', onShow);
+    input.addEventListener('keydown', onKey);
+  });
+}
+
 async function connectWifi(network) {
   let password = '';
   if (network.security) {
-    password = prompt(`Password for ${network.ssid}:`) || '';
+    password = await askWifiPassword(network);
     if (!password) return;
   }
   toast(`Connecting to ${network.ssid}…`);
