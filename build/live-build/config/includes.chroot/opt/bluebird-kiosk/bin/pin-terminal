@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# PIN-gated shell for on-site field troubleshooting.
+#
+# Bound to Ctrl+Alt+T in the locked sway config. Opens inside a `foot`
+# terminal window, prompts for the BlueBird admin PIN (the same 6-digit
+# PIN as the admin overlay), validates it against the bcrypt hash at
+# /etc/bluebird/admin.pin, and only then drops to an interactive shell.
+# Three wrong tries and it closes.
+#
+# This is the deliberate, gated escape hatch on a hardened kiosk (where
+# SSH + TTY switching are disabled). It needs a physical keyboard and the
+# PIN, so a student/janitor can't reach a shell — but a technician with
+# the PIN can.
+set -u
+
+PIN_FILE=/etc/bluebird/admin.pin
+
+clear 2>/dev/null || true
+echo "──────────────────────────────────────────────"
+echo "  BlueBird Kiosk — admin terminal"
+echo "──────────────────────────────────────────────"
+echo
+
+if [[ ! -f "$PIN_FILE" ]]; then
+  echo "No admin PIN is set yet. Run the first-boot wizard first."
+  echo
+  read -rp "Press Enter to close..." _
+  exit 1
+fi
+
+for attempt in 1 2 3; do
+  read -rsp "Admin PIN: " pin
+  echo
+  if /usr/bin/python3 - "$pin" <<'PY' 2>/dev/null
+import sys, bcrypt
+pin = sys.argv[1].encode("utf-8")
+with open("/etc/bluebird/admin.pin", "rb") as f:
+    stored = f.read().strip()
+sys.exit(0 if bcrypt.checkpw(pin, stored) else 1)
+PY
+  then
+    echo
+    echo "Access granted. Type 'exit' to close this terminal."
+    echo
+    cd /var/lib/bluebird-kiosk 2>/dev/null || cd /
+    exec bash --norc -i
+  fi
+  remaining=$((3 - attempt))
+  if [[ $remaining -gt 0 ]]; then
+    echo "Incorrect PIN. $remaining attempt(s) left."
+  fi
+done
+
+echo
+echo "Too many incorrect attempts. Closing."
+sleep 2
+exit 1

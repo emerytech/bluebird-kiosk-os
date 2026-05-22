@@ -108,6 +108,10 @@ APT_PACKAGES=(
   # Browser
   chromium
 
+  # Terminal emulator — only reachable via the PIN-gated Ctrl+Alt+T
+  # keybinding for field troubleshooting (see pin-terminal launcher).
+  foot
+
   # Networking
   network-manager wpasupplicant iw dnsutils iputils-ping
 
