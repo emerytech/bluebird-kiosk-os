@@ -184,6 +184,14 @@ install -m 0644 "$LIVE_BUILD_INC/etc/sway/config.d/bluebird-locked.conf" /etc/sw
 # Stock sway config sources config.d/*; if it's missing, create a minimal one.
 [[ -f /etc/sway/config ]] || \
   printf 'include /etc/sway/config.d/*\n' > /etc/sway/config
+# Neutralize the stock Debian wallpaper line. It points at
+# /usr/share/backgrounds/sway/Sway_Wallpaper_Blue_1920x1080.png from the
+# `sway-backgrounds` package, which we don't install — so sway pops a red
+# config-error nag bar over the kiosk on every boot. Our locked config
+# already sets a solid black background, so just comment the line out.
+if [[ -f /etc/sway/config ]]; then
+  sed -i 's|^\(\s*output \* bg /usr/share/backgrounds/sway/.*\)|# &|' /etc/sway/config
+fi
 
 log "installing kiosk launcher scripts"
 install -d /opt/bluebird-kiosk/bin
