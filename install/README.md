@@ -55,9 +55,15 @@ sudo bash /tmp/kiosk-os/install/install.sh
 | Flag | What it does |
 |---|---|
 | `--debug` | Skip the lockdown step. VT switching (`Ctrl+Alt+F2`) stays available, extra TTYs unmasked, root unlocked, ssh enabled. Use during development. Re-run without `--debug` to apply the harden later. |
+| `--keep-ssh` | Apply the full lockdown (TTYs masked, root locked) **but leave the SSH server installed + enabled**, so you can `ssh`/`scp` into the kiosk for remote management. Installs `openssh-server` if missing. Recommended for kiosks you'll manage remotely. |
 | `--no-firstboot` | Don't auto-launch the firstboot wizard. Use if you've pre-baked `/etc/bluebird/kiosk.conf` with the slug + PIN. |
 
-Both flags are idempotent — safe to combine, safe to re-run.
+All flags are idempotent — safe to combine, safe to re-run.
+
+**Field terminal:** on any installed kiosk, **`Ctrl+Alt+T`** opens a PIN-gated
+terminal (enter the 6-digit admin PIN). Works even on a fully hardened kiosk —
+the deliberate shell escape hatch for on-site troubleshooting without an SSH
+session or keyboard TTY.
 
 ## What it does
 

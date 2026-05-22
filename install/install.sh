@@ -11,6 +11,10 @@
 #   --debug          Skip the lockdown step (VTs stay accessible, root stays
 #                    usable). Use during development. Re-run without --debug to
 #                    apply the harden later.
+#   --keep-ssh       Apply the full lockdown (TTYs masked, root locked) but
+#                    leave the SSH server installed + enabled, so you can
+#                    ssh/scp into the kiosk for remote management after setup.
+#                    Ignored under --debug (which already leaves ssh as-is).
 #   --no-firstboot   Don't auto-launch the firstboot wizard on next reboot.
 #                    Use if you want to drop the device into kiosk mode via
 #                    a pre-baked /etc/bluebird/kiosk.conf.
@@ -28,9 +32,11 @@ LIVE_BUILD_INC="$KIOSK_OS/build/live-build/config/includes.chroot"
 # ── Flags ─────────────────────────────────────────────────────────────────────
 DEBUG=0
 SKIP_FIRSTBOOT=0
+KEEP_SSH=0
 for arg in "$@"; do
   case "$arg" in
     --debug) DEBUG=1 ;;
+    --keep-ssh) KEEP_SSH=1 ;;
     --no-firstboot) SKIP_FIRSTBOOT=1 ;;
     -h|--help)
       grep '^#' "$0" | sed 's/^# \{0,1\}//'
@@ -298,6 +304,18 @@ systemctl set-default bluebird-kiosk.target
 #   - the firstboot wizard is picked by sway's launch-bluebird-session dispatcher
 #     based on whether /etc/bluebird/configured exists
 
+# ── SSH for remote management (--keep-ssh, or always under --debug) ──────────
+# Make sure the SSH server is present + enabled when the operator wants
+# remote access. On a minimal Debian install openssh-server may not be
+# present, so install it on demand.
+if [[ "$KEEP_SSH" -eq 1 || "$DEBUG" -eq 1 ]]; then
+  if ! dpkg -s openssh-server >/dev/null 2>&1; then
+    log "installing openssh-server (remote management requested)"
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server
+  fi
+  systemctl enable --now ssh.service 2>/dev/null || systemctl enable --now sshd.service 2>/dev/null || true
+fi
+
 # ── Harden (skipped under --debug) ───────────────────────────────────────────
 if [[ "$DEBUG" -eq 0 ]]; then
   log "applying lockdown (skip with --debug)"
@@ -314,7 +332,11 @@ KillUserProcesses=no
 EOF
   systemctl mask getty@tty2.service getty@tty3.service getty@tty4.service \
     getty@tty5.service getty@tty6.service
-  systemctl disable ssh.service 2>/dev/null || true
+  if [[ "$KEEP_SSH" -eq 1 ]]; then
+    warn "keep-ssh: SSH left enabled — kiosk is reachable via ssh/scp"
+  else
+    systemctl disable ssh.service 2>/dev/null || true
+  fi
   passwd -l root || true
 else
   warn "debug mode: VT switching, root, ssh, and getty@tty[2-6] left as-is"
@@ -366,5 +388,11 @@ echo "  3. After firstboot, the kiosk lands at the configured Legacy Wall URL."
 echo
 echo "Recovery:"
 echo "  - Re-run this script with --debug to lift the lockdown for diagnostics."
+echo "  - Re-run with --keep-ssh for a hardened kiosk that still allows ssh/scp."
+echo "  - PIN-gated terminal at the kiosk: Ctrl+Alt+T (enter the admin PIN)."
 echo "  - Wipe & restart firstboot:  sudo rm /etc/bluebird/configured /etc/bluebird/admin.pin && sudo reboot"
 echo
+if [[ "$KEEP_SSH" -eq 1 || "$DEBUG" -eq 1 ]]; then
+  echo "SSH: enabled — reach this kiosk with  ssh <user>@$(hostname -I 2>/dev/null | awk '{print $1}')"
+  echo
+fi
