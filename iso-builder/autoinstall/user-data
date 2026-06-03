@@ -1,0 +1,99 @@
+#cloud-config
+# BlueBird Kiosk OS — Ubuntu 24.04 Server autoinstall config.
+#
+# Loaded by Subiquity when the ISO boots in autoinstall mode. The build-iso.sh
+# script in this directory embeds this file at /nocloud/user-data inside the
+# remastered ISO, with `ds=nocloud;s=/cdrom/nocloud/` on the kernel cmdline.
+#
+# Behavior:
+#   - Wipes the first internal disk, installs Ubuntu Server 24.04
+#   - Creates user `bluebird` with the default password (see identity.password)
+#   - Hostname `bluebird-kiosk` — the firstboot wizard can rename later
+#   - SSH server installed + enabled
+#   - At the very end of curtin's chroot, late-commands curls down the
+#     /api/public/install-kiosk.sh bootstrap from bluebirdalerts.com and runs
+#     it, which apt-installs sway/chromium/etc, drops the kiosk launcher
+#     scripts + systemd units, and configures Plymouth + GRUB. The next boot
+#     lands directly in the BlueBird firstboot wizard (WiFi → slug → PIN).
+#
+# Default credentials baked into the image (override post-install if needed):
+#   username:  bluebird
+#   password:  bluebird2026!!
+#
+# Subiquity will stop at the network step only if no Ethernet auto-config
+# works — interactive-sections: [network] makes the network UI visible so
+# the operator can pick WiFi + enter the password on WiFi-only kiosks. On
+# Ethernet, the step shows DHCP-on-eth0 working and the operator just
+# clicks Done.
+
+autoinstall:
+  version: 1
+
+  # Stop here interactively if the operator needs to pick a WiFi network.
+  # Ethernet just shows the auto-DHCP screen and one click moves past it.
+  interactive-sections:
+    - network
+
+  identity:
+    hostname: bluebird-kiosk
+    username: bluebird
+    realname: BlueBird Kiosk Operator
+    # SHA-512 crypt hash of "bluebird2026!!" (deterministic salt — fine for
+    # a default password baked into a public installer image; rotate via
+    # `passwd bluebird` after first login if you want to harden).
+    password: "$6$BlueBirdKi$mv2EW78jM3GnTRLICXJ4P04DQ8JeXYno9xlNduq5I0Iuqy7y66p8KRuwOEjiHbismPDBuURA0upUpv6vfokew0"
+
+  locale: en_US.UTF-8
+  keyboard:
+    layout: us
+
+  # Auto-detect timezone from the public IP at install time. Falls back to UTC
+  # if the IP geolocation lookup fails.
+  timezone: geoip
+
+  # Wipe the first internal disk. `direct` skips LVM — simpler for a kiosk
+  # which doesn't need snapshots or resizable volumes.
+  storage:
+    layout:
+      name: direct
+
+  ssh:
+    install-server: true
+    allow-pw: true
+
+  # The kiosk install bootstrap pulls everything else (sway, chromium, etc.).
+  # We only need enough here to run the bootstrap itself.
+  packages:
+    - curl
+    - ca-certificates
+    - git
+    - sudo
+    - openssh-server
+
+  # Skip the Canonical-curated post-install "would you like to install
+  # snap X" step. Snap chromium specifically would conflict with the
+  # xtradeb-PPA chromium our installer drops.
+  snaps: []
+
+  # Don't run apt-get upgrade during install — it's slow and the kiosk's
+  # unattended-upgrades will pick up patches on the schedule the installer
+  # configures (security pocket only, 03:00 reboot window).
+  refresh-installer:
+    update: false
+
+  # Final step: download and run the BlueBird kiosk bootstrap inside the
+  # curtin chroot. The bootstrap apt-installs sway/chromium/greetd/etc,
+  # drops the kiosk launcher scripts + systemd units, activates the
+  # Plymouth splash, and configures GRUB. On the next boot the kiosk
+  # lands directly in the BlueBird firstboot wizard.
+  #
+  # `|| true` so a partial bootstrap failure doesn't abort the autoinstall —
+  # the operator can re-run the bootstrap by hand from the booted system
+  # if something inside the chroot stage misbehaves (e.g. sysctl -w in
+  # a chroot can fail; the underlying persistence file is still written).
+  late-commands:
+    - 'curtin in-target --target=/target -- bash -c "curl -fsSL https://bluebirdalerts.com/api/public/install-kiosk.sh | bash" || true'
+
+  # Reboot after install completes — autoinstall default already does this,
+  # but stating it explicitly makes the intent visible.
+  shutdown: reboot
