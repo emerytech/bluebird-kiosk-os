@@ -463,17 +463,33 @@ if [[ -d "$THEME_SRC" ]]; then
     /usr/share/plymouth/themes/bluebird/
 fi
 
-# Step 2: activate the theme + rebuild initramfs (-R). On Debian/Ubuntu the
-# binary lives in /usr/sbin/, which isn't in non-interactive sudo's
-# stripped PATH — call by absolute path.
-PLY_BIN=/usr/sbin/plymouth-set-default-theme
-if [[ -x "$PLY_BIN" && -d /usr/share/plymouth/themes/bluebird ]]; then
+# Step 2: activate the theme + rebuild initramfs. Two mechanisms:
+#   - Debian: ships `plymouth-set-default-theme` (a small shell wrapper);
+#     the -R flag also runs update-initramfs.
+#   - Ubuntu 23.10+: dropped that binary in favor of update-alternatives.
+#     We register bluebird.plymouth at high priority and set it active,
+#     then update-initramfs by hand.
+if [[ -d /usr/share/plymouth/themes/bluebird ]]; then
   log "activating Plymouth boot splash (theme: bluebird)"
-  if ! "$PLY_BIN" -R bluebird >/dev/null 2>&1; then
-    warn "  plymouth-set-default-theme failed — splash may not appear; initramfs rebuild needed"
+  BLUEBIRD_PLY=/usr/share/plymouth/themes/bluebird/bluebird.plymouth
+  if command -v plymouth-set-default-theme >/dev/null 2>&1; then
+    plymouth-set-default-theme -R bluebird >/dev/null 2>&1 || \
+      warn "  plymouth-set-default-theme failed — splash may not appear"
+  elif command -v update-alternatives >/dev/null 2>&1; then
+    update-alternatives --install \
+      /usr/share/plymouth/themes/default.plymouth \
+      default.plymouth \
+      "$BLUEBIRD_PLY" 200 >/dev/null 2>&1
+    update-alternatives --set default.plymouth "$BLUEBIRD_PLY" >/dev/null 2>&1
+    if command -v update-initramfs >/dev/null 2>&1; then
+      update-initramfs -u >/dev/null 2>&1 || \
+        warn "  update-initramfs failed — splash may not appear until next regen"
+    fi
+  else
+    warn "  no Plymouth theme-switch mechanism found (no plymouth-set-default-theme, no update-alternatives)"
   fi
 else
-  warn "  plymouth not installed or bluebird theme missing — skipping boot splash"
+  warn "  bluebird theme missing under /usr/share/plymouth/themes/ — skipping splash activation"
 fi
 
 # GRUB: hide the menu but keep it Esc-interruptible, narrow the timeout
