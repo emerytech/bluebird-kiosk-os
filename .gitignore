@@ -1,0 +1,11 @@
+.DS_Store
+__pycache__/
+*.pyc
+*.swp
+*.swo
+.idea/
+.vscode/
+*.iso
+*.iso.sha256
+dist/
+build/cache/
