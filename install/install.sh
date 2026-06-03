@@ -8,16 +8,26 @@
 #   sudo bash /tmp/bb/kiosk-os/install/install.sh
 #
 # Flags:
-#   --debug          Skip the lockdown step (VTs stay accessible, root stays
-#                    usable). Use during development. Re-run without --debug to
-#                    apply the harden later.
-#   --keep-ssh       Apply the full lockdown (TTYs masked, root locked) but
-#                    leave the SSH server installed + enabled, so you can
-#                    ssh/scp into the kiosk for remote management after setup.
-#                    Ignored under --debug (which already leaves ssh as-is).
+#   --lockdown       OPT IN to the full harden: VT switching disabled, extra
+#                    TTYs masked, root locked, ssh disabled. Use for kiosks
+#                    deployed in public/hallway spaces where you don't want
+#                    a student finding a shell. Re-run without --lockdown to
+#                    lift the harden later (root stays locked — set the root
+#                    password by hand if you need it).
+#   --keep-ssh       When combined with --lockdown, keep the SSH server
+#                    enabled (full harden minus the ssh-disable step). No
+#                    effect without --lockdown — ssh is on by default.
 #   --no-firstboot   Don't auto-launch the firstboot wizard on next reboot.
 #                    Use if you want to drop the device into kiosk mode via
 #                    a pre-baked /etc/bluebird/kiosk.conf.
+#   --debug          Backward-compat no-op. The "open + manageable" behavior
+#                    this used to enable is now the default; the flag is
+#                    accepted so older copies of the bootstrap script don't
+#                    break.
+#
+# Default behavior (no flags): SSH on, TTY switching reachable (Ctrl+Alt+F2),
+# root unlocked, all sshd defaults. Optimized for development + operator
+# access. Add --lockdown for the production-hardening pass.
 #
 # Idempotent: safe to re-run. Each step checks state before acting.
 
@@ -30,14 +40,20 @@ KIOSK_OS="$REPO_ROOT/kiosk-os"
 LIVE_BUILD_INC="$KIOSK_OS/build/live-build/config/includes.chroot"
 
 # ── Flags ─────────────────────────────────────────────────────────────────────
-DEBUG=0
+LOCKDOWN=0
 SKIP_FIRSTBOOT=0
 KEEP_SSH=0
 for arg in "$@"; do
   case "$arg" in
-    --debug) DEBUG=1 ;;
+    --lockdown) LOCKDOWN=1 ;;
     --keep-ssh) KEEP_SSH=1 ;;
     --no-firstboot) SKIP_FIRSTBOOT=1 ;;
+    --debug)
+      # Backward-compat no-op — the open behavior --debug used to gate is
+      # now the default. Accept the flag silently so older copies of the
+      # /api/public/install-kiosk.sh bootstrap don't break.
+      :
+      ;;
     -h|--help)
       grep '^#' "$0" | sed 's/^# \{0,1\}//'
       exit 0
@@ -69,7 +85,7 @@ case "${VERSION_ID:-}" in
   *) warn "running on ${ID} ${VERSION_ID:-unknown} (tested on Debian 12 / 13 + Ubuntu 24.04) — proceeding anyway" ;;
 esac
 
-log "kiosk install starting (repo: $REPO_ROOT, debug=$DEBUG, firstboot=$((1 - SKIP_FIRSTBOOT)))"
+log "kiosk install starting (repo: $REPO_ROOT, lockdown=$LOCKDOWN, keep-ssh=$KEEP_SSH, firstboot=$((1 - SKIP_FIRSTBOOT)))"
 
 # ── apt packages ─────────────────────────────────────────────────────────────
 log "installing apt packages (this is the slow step)"
@@ -304,21 +320,22 @@ systemctl set-default bluebird-kiosk.target
 #   - the firstboot wizard is picked by sway's launch-bluebird-session dispatcher
 #     based on whether /etc/bluebird/configured exists
 
-# ── SSH for remote management (--keep-ssh, or always under --debug) ──────────
-# Make sure the SSH server is present + enabled when the operator wants
-# remote access. On a minimal Debian install openssh-server may not be
-# present, so install it on demand.
-if [[ "$KEEP_SSH" -eq 1 || "$DEBUG" -eq 1 ]]; then
-  if ! dpkg -s openssh-server >/dev/null 2>&1; then
-    log "installing openssh-server (remote management requested)"
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server
-  fi
-  systemctl enable --now ssh.service 2>/dev/null || systemctl enable --now sshd.service 2>/dev/null || true
+# ── SSH for remote management (always — operator + auto-update need it) ─────
+# openssh-server is installed + enabled unconditionally now. The hardening
+# pass below can selectively disable it when --lockdown is set without
+# --keep-ssh; by default it stays on.
+if ! dpkg -s openssh-server >/dev/null 2>&1; then
+  log "installing openssh-server (default — remote management on by default)"
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server
 fi
+systemctl enable --now ssh.service 2>/dev/null || systemctl enable --now sshd.service 2>/dev/null || true
 
-# ── Harden (skipped under --debug) ───────────────────────────────────────────
-if [[ "$DEBUG" -eq 0 ]]; then
-  log "applying lockdown (skip with --debug)"
+# ── Harden (opt-in via --lockdown) ───────────────────────────────────────────
+# Default behavior: leave VT switching reachable, root unlocked, ssh on,
+# extra TTYs unmasked. Pass --lockdown for a kiosk that's going into a
+# hallway or other unsupervised location.
+if [[ "$LOCKDOWN" -eq 1 ]]; then
+  log "applying lockdown (--lockdown)"
   install -d /etc/systemd/logind.conf.d
   cat >/etc/systemd/logind.conf.d/bluebird-kiosk.conf <<'EOF'
 [Login]
@@ -333,13 +350,19 @@ EOF
   systemctl mask getty@tty2.service getty@tty3.service getty@tty4.service \
     getty@tty5.service getty@tty6.service
   if [[ "$KEEP_SSH" -eq 1 ]]; then
-    warn "keep-ssh: SSH left enabled — kiosk is reachable via ssh/scp"
+    warn "lockdown + keep-ssh: harden applied, SSH left enabled for remote ops"
   else
     systemctl disable ssh.service 2>/dev/null || true
+    warn "lockdown: SSH disabled — only Ctrl+Alt+T (PIN-gated) reaches a shell"
   fi
   passwd -l root || true
 else
-  warn "debug mode: VT switching, root, ssh, and getty@tty[2-6] left as-is"
+  log "no lockdown — SSH on, TTY switching reachable, root unlocked (default)"
+  # Undo any residual lockdown from a prior --lockdown run on this same box,
+  # so re-running the installer without --lockdown actually lifts it.
+  rm -f /etc/systemd/logind.conf.d/bluebird-kiosk.conf
+  systemctl unmask getty@tty2.service getty@tty3.service getty@tty4.service \
+    getty@tty5.service getty@tty6.service 2>/dev/null || true
 fi
 
 # ── Record installed version ─────────────────────────────────────────────────
@@ -387,12 +410,16 @@ echo "     Walk through: WiFi (or skip for Ethernet) → school slug → 6-digit
 echo "  3. After firstboot, the kiosk lands at the configured Legacy Wall URL."
 echo
 echo "Recovery:"
-echo "  - Re-run this script with --debug to lift the lockdown for diagnostics."
-echo "  - Re-run with --keep-ssh for a hardened kiosk that still allows ssh/scp."
+echo "  - Re-run this script without --lockdown to lift the harden for diagnostics."
+echo "  - Re-run with --lockdown --keep-ssh for a hardened kiosk that still allows ssh/scp."
 echo "  - PIN-gated terminal at the kiosk: Ctrl+Alt+T (enter the admin PIN)."
 echo "  - Wipe & restart firstboot:  sudo rm /etc/bluebird/configured /etc/bluebird/admin.pin && sudo reboot"
 echo
-if [[ "$KEEP_SSH" -eq 1 || "$DEBUG" -eq 1 ]]; then
-  echo "SSH: enabled — reach this kiosk with  ssh <user>@$(hostname -I 2>/dev/null | awk '{print $1}')"
+# SSH is on by default; surface the address. Suppressed only when --lockdown
+# was applied AND --keep-ssh wasn't, which is the one combination that
+# actually turns ssh off.
+if [[ "$LOCKDOWN" -eq 0 || "$KEEP_SSH" -eq 1 ]]; then
+  KIOSK_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  echo "SSH: enabled — reach this kiosk with  ssh <user>@${KIOSK_IP:-<ip>}"
   echo
 fi

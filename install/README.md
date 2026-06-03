@@ -50,13 +50,25 @@ scp -r kiosk-os/ user@target:/tmp/
 sudo bash /tmp/kiosk-os/install/install.sh
 ```
 
+## Defaults
+
+A vanilla install (no flags) is **open + manageable**:
+
+- **SSH enabled** — `openssh-server` is installed unconditionally, so you can `ssh` / `scp` into the kiosk for remote management
+- **TTY switching reachable** — `Ctrl+Alt+F2` reaches a console login
+- **Root unlocked** — set its password by hand if you want
+- **No VT/getty masking**
+
+This is the right shape for in-house kiosks, test units, and anything you want to be able to poke at over SSH. Add `--lockdown` for the production-hardening pass when a kiosk goes into a hallway.
+
 ## Flags
 
 | Flag | What it does |
 |---|---|
-| `--debug` | Skip the lockdown step. VT switching (`Ctrl+Alt+F2`) stays available, extra TTYs unmasked, root unlocked, ssh enabled. Use during development. Re-run without `--debug` to apply the harden later. |
-| `--keep-ssh` | Apply the full lockdown (TTYs masked, root locked) **but leave the SSH server installed + enabled**, so you can `ssh`/`scp` into the kiosk for remote management. Installs `openssh-server` if missing. Recommended for kiosks you'll manage remotely. |
+| `--lockdown` | **Opt in to the full harden** — `NAutoVTs=0`, getty@tty[2-6] masked, root account locked (`passwd -l root`), and (unless `--keep-ssh` is also set) `ssh.service` disabled. Use for kiosks deployed in public/hallway spaces. Re-running the installer without `--lockdown` lifts the harden (TTYs unmasked, logind conf removed); root stays locked — set the root password by hand if you need it. |
+| `--keep-ssh` | When combined with `--lockdown`, keep `ssh.service` enabled (full harden minus the ssh-disable step). No effect without `--lockdown` — SSH is on by default. |
 | `--no-firstboot` | Don't auto-launch the firstboot wizard. Use if you've pre-baked `/etc/bluebird/kiosk.conf` with the slug + PIN. |
+| `--debug` | Backward-compat no-op. The "open + manageable" behavior `--debug` used to gate is now the default. Accepted silently so older copies of the bootstrap don't break. |
 
 All flags are idempotent — safe to combine, safe to re-run.
 
