@@ -85,7 +85,13 @@ case "${VERSION_ID:-}" in
   *) warn "running on ${ID} ${VERSION_ID:-unknown} (tested on Debian 12 / 13 + Ubuntu 24.04) — proceeding anyway" ;;
 esac
 
-log "kiosk install starting (repo: $REPO_ROOT, lockdown=$LOCKDOWN, keep-ssh=$KEEP_SSH, firstboot=$((1 - SKIP_FIRSTBOOT)))"
+# Distro family — Ubuntu and Debian diverge in a few package names + the
+# Chromium delivery mechanism (Ubuntu ships a snap; Debian ships an apt
+# package). Branch on this throughout the rest of the script.
+IS_UBUNTU=0
+[[ "${ID:-}" == "ubuntu" ]] && IS_UBUNTU=1
+
+log "kiosk install starting (repo: $REPO_ROOT, distro=${ID:-?}/${VERSION_ID:-?}, lockdown=$LOCKDOWN, keep-ssh=$KEEP_SSH, firstboot=$((1 - SKIP_FIRSTBOOT)))"
 
 # ── apt packages ─────────────────────────────────────────────────────────────
 log "installing apt packages (this is the slow step)"
@@ -93,7 +99,12 @@ log "installing apt packages (this is the slow step)"
 # Ensure non-free-firmware is enabled (Intel/Realtek firmware lives there).
 # Debian 12 uses /etc/apt/sources.list (one-line format). Debian 13 defaults to
 # /etc/apt/sources.list.d/debian.sources (deb822 format). Handle both.
+# On Ubuntu this is a no-op — Ubuntu bundles the same firmware into the
+# linux-firmware package which lives in main and needs no extra component.
 enable_non_free_firmware() {
+  if [[ "$IS_UBUNTU" -eq 1 ]]; then
+    return 0
+  fi
   local changed=0
   if [[ -f /etc/apt/sources.list ]] && grep -q '^deb ' /etc/apt/sources.list; then
     if ! grep -q 'non-free-firmware' /etc/apt/sources.list; then
@@ -117,6 +128,24 @@ enable_non_free_firmware() {
 DEBIAN_FRONTEND=noninteractive apt-get update -qq
 enable_non_free_firmware
 
+# Distro-specific package names.
+#
+# - Chromium: Debian ships a real apt package (`chromium`). Ubuntu's `chromium`
+#   apt package is a transitional snap (the binary lives at /snap/bin/chromium,
+#   not /usr/bin/chromium). We install the Ubuntu transitional package and
+#   then symlink /usr/bin/chromium after the apt step.
+# - Firmware: Debian splits NIC firmware across `firmware-iwlwifi`,
+#   `firmware-realtek`, and `firmware-misc-nonfree`. Ubuntu bundles all of
+#   that into the single `linux-firmware` package (and Ubuntu's
+#   `firmware-linux` doesn't exist).
+if [[ "$IS_UBUNTU" -eq 1 ]]; then
+  CHROMIUM_PKG=chromium-browser
+  FIRMWARE_PKGS=(linux-firmware)
+else
+  CHROMIUM_PKG=chromium
+  FIRMWARE_PKGS=(firmware-linux firmware-iwlwifi firmware-realtek firmware-misc-nonfree)
+fi
+
 # Mirror of kiosk-os/build/live-build/config/package-lists/bluebird-kiosk.list.chroot,
 # minus things only relevant inside a live ISO build (debian-installer, etc.)
 APT_PACKAGES=(
@@ -127,8 +156,8 @@ APT_PACKAGES=(
   # Greeter
   greetd
 
-  # Browser
-  chromium
+  # Browser (distro-branched: see CHROMIUM_PKG above)
+  "$CHROMIUM_PKG"
 
   # Terminal emulator — only reachable via the PIN-gated Ctrl+Alt+T
   # keybinding for field troubleshooting (see pin-terminal launcher).
@@ -148,8 +177,8 @@ APT_PACKAGES=(
   python3-fastapi python3-uvicorn python3-jinja2 python3-pydantic
   python3-bcrypt python3-requests
 
-  # Firmware for common WiFi/eth chips
-  firmware-linux firmware-iwlwifi firmware-realtek firmware-misc-nonfree
+  # Firmware for common WiFi/eth chips (distro-branched: see FIRMWARE_PKGS above)
+  "${FIRMWARE_PKGS[@]}"
 
   # Authorization daemon — required for the kiosk user to call
   # `systemctl reboot/poweroff` and NetworkManager actions without a password.
@@ -167,6 +196,25 @@ APT_PACKAGES=(
 )
 
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${APT_PACKAGES[@]}"
+
+# Ubuntu-specific: the chromium package above is a transitional snap.
+# Make /usr/bin/chromium resolve to whatever the snap actually installed,
+# so the hard-coded launcher paths (launch-kiosk-chromium et al.) work.
+if [[ "$IS_UBUNTU" -eq 1 && ! -e /usr/bin/chromium ]]; then
+  CHROMIUM_BIN=""
+  for cand in /snap/bin/chromium /usr/bin/chromium-browser /usr/bin/chromium-snap; do
+    [[ -x "$cand" ]] && CHROMIUM_BIN="$cand" && break
+  done
+  if [[ -n "$CHROMIUM_BIN" ]]; then
+    log "Ubuntu: symlinking /usr/bin/chromium → $CHROMIUM_BIN"
+    ln -sf "$CHROMIUM_BIN" /usr/bin/chromium
+  else
+    warn "Ubuntu: chromium-browser installed but no binary found at the expected"
+    warn "  paths (/snap/bin/chromium, /usr/bin/chromium-browser). The kiosk"
+    warn "  launchers will fail until /usr/bin/chromium exists. Try:"
+    warn "    sudo snap install chromium && sudo ln -sf /snap/bin/chromium /usr/bin/chromium"
+  fi
+fi
 
 # ── User + directories ───────────────────────────────────────────────────────
 log "creating bluebird-kiosk system group + user"

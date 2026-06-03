@@ -13,9 +13,20 @@ proves out at scale.
 - An x86_64 PC (mini-PC, NUC, repurposed laptop — anything Debian boots on).
 - A working internet connection (script downloads ~700 MB of apt packages
   the first time).
-- Debian 12 "bookworm", Debian 13 "trixie", or Ubuntu 24.04 LTS, freshly
-  installed, command-line only (no desktop environment).
+- Debian 12 "bookworm", Debian 13 "trixie", or Ubuntu 24.04 LTS Server,
+  freshly installed, command-line only (no desktop environment).
 - An admin user with sudo.
+
+**Ubuntu vs Debian:** the installer auto-detects which one you're on and:
+- Substitutes Ubuntu's `chromium-browser` (a snap-wrapper apt package) for
+  Debian's `chromium`, then symlinks `/usr/bin/chromium` to wherever the
+  snap binary ended up so all the launcher scripts keep working.
+- Substitutes Ubuntu's `linux-firmware` for Debian's split
+  `firmware-iwlwifi` / `firmware-realtek` / `firmware-misc-nonfree`.
+- Skips the Debian-only "enable non-free-firmware component" sources tweak.
+
+Either distro works for the production kiosk role; Debian is what's been
+tested most.
 
 ## Install — quick path
 
