@@ -468,6 +468,14 @@ def create_app() -> FastAPI:
                 "Access-Control-Allow-Methods": "POST, OPTIONS",
                 "Access-Control-Allow-Headers": "Content-Type",
                 "Access-Control-Max-Age": "600",
+                # Chrome's Private Network Access (PNA) restriction blocks
+                # HTTPS-page → loopback fetches unless the preflight response
+                # explicitly opts in. Without this header, the "Kiosk Settings"
+                # button on the cloud Legacy Wall fails silently in browser-land
+                # even though every server-side CORS check passes from curl.
+                # The kiosk admin server is *the* only loopback target the
+                # cloud page ever talks to, so blanket-allowing is safe.
+                "Access-Control-Allow-Private-Network": "true",
                 "Vary": "Origin",
             }
         return {}
