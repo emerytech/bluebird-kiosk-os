@@ -34,6 +34,51 @@ autoinstall:
   interactive-sections:
     - network
 
+  # Pre-storage cleanup — runs in the installer environment BEFORE Subiquity
+  # discovers block devices. Field-reported failure on a kiosk that was
+  # previously running Windows (hibernated + Fast Startup on):
+  #
+  #   Windows is hibernated, refused to mount.
+  #   ntfs-3g: The disk contains an unclean file system (0, 0).
+  #   GPT PMBR size mismatch (5415515 != 240353279) ...
+  #   Timed out waiting for udev queue being empty.
+  #   [!!!!!] Failed to start up manager. Freezing execution.
+  #
+  # Subiquity's storage probe tries to mount EVERY partition to populate the
+  # "you're about to wipe this" preview, and on a hibernated NTFS partition
+  # that mount hangs, blocking udev, and systemd kills the installer.
+  #
+  # We don't need any of that data — `storage.layout: direct` is going to
+  # wipe the whole disk anyway. So before Subiquity probes, zap every
+  # partition table on every non-removable block device:
+  #
+  #   wipefs -af              clears LUKS/RAID/LVM/Bootloader signatures
+  #   sgdisk --zap-all        wipes BOTH GPT headers + protective MBR
+  #   dd 1MB of zeros         flattens any signature wipefs missed
+  #
+  # Removable disks (USB sticks — including the installer's own boot media)
+  # are excluded via `/sys/block/*/removable`. The loop tolerates missing
+  # sgdisk / wipefs by falling through to dd.
+  early-commands:
+    - |
+      set -e
+      for dev in /sys/block/sd* /sys/block/nvme*n* /sys/block/mmcblk* /sys/block/vd*; do
+        [ -d "$dev" ] || continue
+        name="$(basename "$dev")"
+        if [ "$(cat "$dev/removable" 2>/dev/null || echo 1)" = "1" ]; then
+          echo "skip removable /dev/$name"
+          continue
+        fi
+        echo "wiping /dev/$name (pre-Subiquity)"
+        umount -A --recursive "/dev/$name"* 2>/dev/null || true
+        swapoff -a 2>/dev/null || true
+        wipefs -af "/dev/$name" 2>/dev/null || true
+        sgdisk --zap-all "/dev/$name" 2>/dev/null || true
+        dd if=/dev/zero of="/dev/$name" bs=1M count=10 conv=fsync 2>/dev/null || true
+      done
+      partprobe 2>/dev/null || true
+      udevadm settle --timeout=10 || true
+
   identity:
     hostname: bluebird-kiosk
     username: bluebird
