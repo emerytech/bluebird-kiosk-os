@@ -4,10 +4,23 @@
 #   - the gesture daemon (5-finger long-press on a touchscreen)
 #   - the Ctrl+Alt+B sway keybinding (keyboard fallback, useful on kiosks
 #     with no touchscreen or while diagnosing)
+#   - the cloud Legacy Wall settings menu (POST to local admin server)
 #
-# Already-open admin window is a no-op (Chromium's --new-window handles
-# focus); we don't try to deduplicate ourselves.
+# Idempotency: if an admin Chromium is already running with our
+# --user-data-dir, Chromium's singleton lock makes the new process a
+# no-op AND the original (possibly hidden) window stays put. Worst case,
+# repeated clicks pile up zero-size tiled siblings (we hit this live).
+# So: pkill any existing admin Chromium first, sleep briefly, then
+# start fresh. Always produces a new, visible window.
 set -eu
+
+USER_DATA_DIR=/var/lib/bluebird-kiosk/admin-chromium
+
+# Match by --user-data-dir — this distinguishes the admin overlay from the
+# kiosk Chromium even though both share /usr/bin/chromium.
+pkill -f -- "--user-data-dir=$USER_DATA_DIR" 2>/dev/null || true
+# Brief wait so chromium releases the singleton lock + closes its windows.
+sleep 0.5
 
 exec /usr/bin/chromium \
   --ozone-platform=wayland \
@@ -17,6 +30,6 @@ exec /usr/bin/chromium \
   --password-store=basic \
   --incognito \
   --disable-features=PasswordManager,AutofillServerCommunication,AutofillPasswordGeneration \
-  --user-data-dir=/var/lib/bluebird-kiosk/admin-chromium \
+  --user-data-dir="$USER_DATA_DIR" \
   --window-size=800,1000 \
   --app="http://127.0.0.1:7311/admin"
