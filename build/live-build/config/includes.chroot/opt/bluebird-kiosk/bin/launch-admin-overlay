@@ -57,6 +57,15 @@ unfullscreen_kiosk
   done
 ) &
 
+# If the caller passed BLUEBIRD_PREAUTH (cloud Legacy Wall "Kiosk Settings"
+# entry point), pass it through to the page as a URL param. admin.js
+# consumes ?preauth=... and short-circuits the local PIN screen — the
+# operator already authenticated in the BlueBird admin console upstream.
+URL="http://127.0.0.1:7311/admin"
+if [[ -n "${BLUEBIRD_PREAUTH:-}" ]]; then
+  URL="${URL}?preauth=${BLUEBIRD_PREAUTH}"
+fi
+
 exec /usr/bin/chromium \
   --ozone-platform=wayland \
   --new-window \
@@ -67,4 +76,4 @@ exec /usr/bin/chromium \
   --disable-features=PasswordManager,AutofillServerCommunication,AutofillPasswordGeneration \
   --user-data-dir="$USER_DATA_DIR" \
   --window-size=800,1000 \
-  --app="http://127.0.0.1:7311/admin"
+  --app="$URL"

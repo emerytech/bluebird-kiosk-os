@@ -1,15 +1,40 @@
 """Wayland output (display) controls via `wlr-randr` and `brightnessctl`.
 
-Only the running sway compositor session has a valid WAYLAND_DISPLAY socket,
-so these calls must be made from a process running as the kiosk user with
-the same XDG_RUNTIME_DIR — i.e., from the bluebird-admin service (which we
-arrange to share that environment).
+Only the running sway compositor session exposes a valid Wayland socket,
+so wlr-randr needs WAYLAND_DISPLAY + XDG_RUNTIME_DIR set to point at that
+socket. The bluebird-admin systemd service runs as the bluebird-kiosk
+user but doesn't get those env vars automatically (systemd system units
+don't inherit user-session XDG vars). We build the env at call time:
+XDG_RUNTIME_DIR=/run/user/<our-uid> + WAYLAND_DISPLAY=wayland-1 (sway's
+default socket name when nothing else is running).
 """
 from __future__ import annotations
 
+import glob
+import os
 import subprocess
 from dataclasses import dataclass
-from typing import List
+from typing import Dict, List
+
+
+def _wayland_env() -> Dict[str, str]:
+    """Return env dict with the bluebird-kiosk Wayland socket vars set.
+
+    Probes /run/user/<uid>/wayland-* to pick the socket sway actually
+    opened (usually wayland-1; falls back to wayland-0 if that's what
+    we find). Returning a fresh dict, not in-place modification, so
+    callers can pass it to subprocess.run without polluting our own
+    environment."""
+    uid = os.getuid()
+    runtime = f"/run/user/{uid}"
+    socks = sorted(glob.glob(f"{runtime}/wayland-*"))
+    # Filter out the .lock files glob also picks up.
+    socks = [s for s in socks if not s.endswith(".lock")]
+    display_name = os.path.basename(socks[0]) if socks else "wayland-1"
+    env = dict(os.environ)
+    env["XDG_RUNTIME_DIR"] = runtime
+    env["WAYLAND_DISPLAY"] = display_name
+    return env
 
 
 @dataclass(frozen=True)
@@ -25,6 +50,7 @@ def list_outputs() -> List[DisplayOutput]:
     try:
         result = subprocess.run(
             ["/usr/bin/wlr-randr"],
+            env=_wayland_env(),
             check=False,
             capture_output=True,
             text=True,
@@ -33,7 +59,8 @@ def list_outputs() -> List[DisplayOutput]:
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return []
     outputs: List[DisplayOutput] = []
-    name = transform = "normal"
+    name = ""
+    transform = "normal"
     current = ""
     modes: List[str] = []
     enabled = True
@@ -50,6 +77,16 @@ def list_outputs() -> List[DisplayOutput]:
                 )
             )
 
+    # wlr-randr output format (one block per output):
+    #   DP-1 "Dell ... (DP-1)"
+    #     Make: Dell Inc.
+    #     ...
+    #     Enabled: yes
+    #     Modes:
+    #       1920x1080 px, 60.000000 Hz (preferred, current)
+    #       1600x900 px, 60.000000 Hz
+    #     Position: 0,0
+    #     Transform: normal
     for line in result.stdout.splitlines():
         if line and not line.startswith(" "):
             _flush()
@@ -64,10 +101,20 @@ def list_outputs() -> List[DisplayOutput]:
                 enabled = "yes" in stripped.lower()
             elif stripped.startswith("Transform:"):
                 transform = stripped.split(":", 1)[1].strip()
-            elif "@" in stripped and "Hz" in stripped:
-                if stripped.endswith("(current)"):
-                    current = stripped.replace("(current)", "").strip()
-                modes.append(stripped.split(" ")[0])
+            elif " px," in stripped and "Hz" in stripped:
+                # "1920x1080 px, 60.000000 Hz (preferred, current)"
+                # Normalize to "1920x1080@60Hz" — the format wlr-randr's
+                # `--mode` flag accepts when setting modes later.
+                res_part, hz_part = stripped.split(" px,", 1)
+                hz = hz_part.strip().split(" ")[0]
+                try:
+                    hz_int = int(round(float(hz)))
+                except ValueError:
+                    hz_int = 0
+                mode_str = f"{res_part.strip()}@{hz_int}Hz" if hz_int else res_part.strip()
+                if "current" in stripped:
+                    current = mode_str
+                modes.append(mode_str)
     _flush()
     return outputs
 
@@ -78,6 +125,7 @@ def set_rotation(output: str, transform: str) -> tuple[bool, str]:
     try:
         result = subprocess.run(
             ["/usr/bin/wlr-randr", "--output", output, "--transform", transform],
+            env=_wayland_env(),
             check=False,
             capture_output=True,
             text=True,
@@ -96,6 +144,7 @@ def set_mode(output: str, mode: str) -> tuple[bool, str]:
     try:
         result = subprocess.run(
             ["/usr/bin/wlr-randr", "--output", output, "--mode", mode],
+            env=_wayland_env(),
             check=False,
             capture_output=True,
             text=True,

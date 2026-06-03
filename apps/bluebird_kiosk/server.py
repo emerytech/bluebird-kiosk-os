@@ -486,7 +486,17 @@ def create_app() -> FastAPI:
 
     @app.post("/admin/kiosk/open-overlay")
     async def admin_open_overlay(request: Request):
-        ok, msg = system.open_admin_overlay()
+        # Issue a single-use 5-minute session so the operator doesn't
+        # have to enter the local kiosk PIN — they already authenticated
+        # in the cloud BlueBird admin to reach the Kiosk Settings button.
+        # The 5-minute TTL is shorter than a regular PIN-issued session
+        # (30 min) because this skipped the device-local auth step.
+        preauth = secrets.token_urlsafe(24)
+        request.app.state.admin_sessions[preauth] = time.monotonic() + 5 * 60
+        ok, msg = system.open_admin_overlay(preauth_token=preauth)
+        if not ok:
+            # Roll back the token so it can't be guessed via the URL later.
+            request.app.state.admin_sessions.pop(preauth, None)
         status = 200 if ok else 500
         return JSONResponse(
             {"ok": ok, "message": msg},

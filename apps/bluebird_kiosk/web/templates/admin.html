@@ -45,9 +45,25 @@
 
       <div class="pane active" data-tab="network">
         <div class="card">
-          <h2>Network</h2>
-          <p id="net-status" class="meta"></p>
+          <div style="display:flex;align-items:center;gap:12px;">
+            <h2 style="margin:0;flex:1">Network</h2>
+            <button id="btn-net-scan" class="secondary">↻ Scan</button>
+          </div>
+          <p id="net-status" class="meta" style="margin-top:12px"></p>
           <div class="wifi-list" id="net-list">Scanning…</div>
+
+          <details style="margin-top:18px;border-top:1px solid var(--bb-border);padding-top:14px;">
+            <summary style="cursor:pointer;font-weight:600;">Join hidden network</summary>
+            <div style="margin-top:12px;display:flex;flex-direction:column;gap:8px;">
+              <label>SSID</label>
+              <input id="hidden-ssid" type="text" autocomplete="off"
+                     placeholder="Network name" inputmode="text">
+              <label>Password</label>
+              <input id="hidden-pass" type="password" autocomplete="off"
+                     placeholder="Leave blank for open networks">
+              <button id="btn-hidden-connect" style="margin-top:6px">Connect</button>
+            </div>
+          </details>
         </div>
       </div>
 

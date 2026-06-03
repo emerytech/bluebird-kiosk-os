@@ -9,6 +9,9 @@ User=bluebird-kiosk
 Group=bluebird-kiosk
 EnvironmentFile=-/etc/bluebird/kiosk.conf
 Environment=PYTHONPATH=/opt/bluebird-kiosk/src
+# WAYLAND_DISPLAY / XDG_RUNTIME_DIR are NOT set here — the bluebird-kiosk
+# uid varies across installs, so display.py/system.py probe /run/user/<uid>
+# at runtime and set these on each subprocess call.
 WorkingDirectory=/opt/bluebird-kiosk
 ExecStart=/usr/bin/python3 -m bluebird_kiosk.server --bind 127.0.0.1 --port 7311
 Restart=on-failure

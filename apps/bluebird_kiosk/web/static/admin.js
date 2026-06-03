@@ -167,12 +167,29 @@ function setTab(name) {
 async function loadNetwork() {
   const list = document.getElementById('net-list');
   list.innerHTML = 'Scanning…';
-  const r = await api('/admin/network/status').then((r) => r.json());
+  let r;
+  try {
+    r = await api('/admin/network/status').then((r) => r.json());
+  } catch (e) {
+    list.innerHTML = '<div class="meta">Could not load network status.</div>';
+    return;
+  }
   const s = r.status || {};
   document.getElementById('net-status').textContent =
     `Ethernet: ${s.ethernet || '—'}   WiFi: ${s.wifi || '—'}   IP: ${s.ip || '—'}`;
   list.innerHTML = '';
-  for (const n of r.networks) {
+  const nets = Array.isArray(r.networks) ? r.networks : [];
+  if (nets.length === 0) {
+    // Two real failure modes: WiFi radio is off, or wpa_supplicant /
+    // NetworkManager has no scan results yet. The Scan button retries
+    // and `nmcli radio wifi on` is the manual fix the operator can
+    // follow up with via Console if needed.
+    list.innerHTML = '<div class="meta">No WiFi networks visible. ' +
+                     'Tap Scan to retry, or use Join hidden network ' +
+                     'below if the SSID isn\'t broadcast.</div>';
+    return;
+  }
+  for (const n of nets) {
     const row = document.createElement('div');
     row.className = 'wifi-row';
     row.innerHTML = `
@@ -180,7 +197,8 @@ async function loadNetwork() {
       <button class="secondary">Connect</button>
     `;
     row.querySelector('.ssid').textContent = n.ssid;
-    row.querySelector('.meta').textContent = `${n.signal}% · ${n.security || 'open'}`;
+    row.querySelector('.meta').textContent =
+      `${n.signal}% · ${n.security || 'open'}${n.in_use ? ' · connected' : ''}`;
     row.querySelector('button').addEventListener('click', async () => {
       const password = n.security ? prompt(`Password for ${n.ssid}:`) || '' : '';
       const resp = await api('/admin/network/connect', {
@@ -191,6 +209,25 @@ async function loadNetwork() {
       if (resp.ok) loadNetwork();
     });
     list.appendChild(row);
+  }
+}
+
+async function connectHiddenNetwork() {
+  const ssid = document.getElementById('hidden-ssid').value.trim();
+  const password = document.getElementById('hidden-pass').value;
+  if (!ssid) {
+    toast('Enter an SSID first.', 'error');
+    return;
+  }
+  const resp = await api('/admin/network/connect', {
+    method: 'POST',
+    body: JSON.stringify({ ssid, password }),
+  }).then((r) => r.json());
+  toast(resp.message || (resp.ok ? 'Connected' : 'Failed'), resp.ok ? 'success' : 'error');
+  if (resp.ok) {
+    document.getElementById('hidden-ssid').value = '';
+    document.getElementById('hidden-pass').value = '';
+    loadNetwork();
   }
 }
 
@@ -489,6 +526,23 @@ function escapeHTML(s) {
 }
 
 document.getElementById('btn-console-refresh').addEventListener('click', consoleRefresh);
+document.getElementById('btn-net-scan').addEventListener('click', loadNetwork);
+document.getElementById('btn-hidden-connect').addEventListener('click', connectHiddenNetwork);
 
 setTab('network');
-showLogin();
+
+// If we were opened with ?preauth=<token>, skip the PIN screen. This is
+// the path the cloud BlueBird admin uses — the operator already
+// authenticated upstream and asking for the device PIN here is a third
+// auth hop. We strip the token from the URL bar immediately so it isn't
+// visible to anyone glancing at the window or recorded in any history.
+const _preauth = new URLSearchParams(window.location.search).get('preauth');
+if (_preauth) {
+  sessionToken = _preauth;
+  try {
+    history.replaceState({}, '', window.location.pathname);
+  } catch (e) { /* ignore — pageshow flow doesn't always allow replaceState */ }
+  showPanels();
+} else {
+  showLogin();
+}

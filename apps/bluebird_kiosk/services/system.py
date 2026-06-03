@@ -201,21 +201,37 @@ def reload_kiosk_display() -> tuple[bool, str]:
     return True, "Kiosk display relaunched."
 
 
-def open_admin_overlay() -> tuple[bool, str]:
-    """Ask sway to spawn the admin overlay Chromium window. Used by the
-    cloud Legacy Wall when an in-admin-mode user clicks "Kiosk Settings"
-    in the settings menu — same effect as the 5-finger gesture or
-    Ctrl+Alt+B. The overlay is PIN-gated by the local admin app, so
-    this entry point doesn't add a new privilege — it just exposes the
-    existing one to users on a touchscreen without the gesture habit."""
+def open_admin_overlay(preauth_token: Optional[str] = None) -> tuple[bool, str]:
+    """Ask sway to spawn the admin overlay Chromium window.
+
+    Two entry points use this:
+      1. Touchscreen 5-finger gesture / Ctrl+Alt+B keybinding — physical
+         access only, requires the on-screen PIN.
+      2. The cloud Legacy Wall "Kiosk Settings" menu item — the operator
+         is already authenticated as a school admin in the BlueBird web
+         console. We pass a fresh single-use session token in the URL
+         so the local PIN screen is skipped (it would be the third auth
+         hop after BlueBird login + Legacy Wall admin unlock).
+
+    ``preauth_token`` is forwarded to the launcher via ``BLUEBIRD_PREAUTH``
+    env var; the launcher appends it to the admin URL. The caller is
+    responsible for adding the token to ``app.state.admin_sessions``
+    before invoking us so that the launched Chromium can use it
+    immediately."""
     sway_sock = _find_sway_socket()
     if sway_sock is None:
         return False, "sway session not found — is the kiosk in graphical mode?"
     env = {**os.environ, "SWAYSOCK": sway_sock}
+    # swaymsg exec uses sway's environment (not our subprocess env), so
+    # inline the preauth token in the shell command. Only printable
+    # ASCII tokens accept this naively; secrets.token_urlsafe() output
+    # is safe (URL-safe base64 charset, no quotes or shell metachars).
+    overlay_cmd = "/opt/bluebird-kiosk/bin/launch-admin-overlay"
+    if preauth_token:
+        overlay_cmd = f"BLUEBIRD_PREAUTH={preauth_token} {overlay_cmd}"
     try:
         result = subprocess.run(
-            ["/usr/bin/swaymsg", "exec",
-             "/opt/bluebird-kiosk/bin/launch-admin-overlay"],
+            ["/usr/bin/swaymsg", "exec", overlay_cmd],
             env=env, capture_output=True, text=True,
             check=False, timeout=5,
         )
