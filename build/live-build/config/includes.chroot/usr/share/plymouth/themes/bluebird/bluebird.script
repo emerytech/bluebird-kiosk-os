@@ -1,0 +1,57 @@
+# BlueBird Kiosk OS boot splash — bluebird Plymouth theme.
+#
+# Centers the Legacy Wall badge on the Legacy Wall sidebar's dark slate
+# background (#0f172a). Stays visible from initramfs through to the point
+# greetd/sway take over the display.
+#
+# Plymouth Script Language reference:
+# https://www.freedesktop.org/wiki/Software/Plymouth/Scripts/
+
+# Background — solid #0f172a (RGB 15,23,42 → 0.059, 0.090, 0.165 in floats).
+Window.SetBackgroundTopColor (0.059, 0.090, 0.165);
+Window.SetBackgroundBottomColor (0.059, 0.090, 0.165);
+
+# Logo — centered, scaled to a reasonable size for the kiosk display.
+# Plymouth runs at native framebuffer resolution; we scale relative to
+# the screen width so the badge looks right on 720p mini-PCs and 4K wall
+# displays alike.
+logo.image = Image ("logo.png");
+screen_w = Window.GetWidth();
+screen_h = Window.GetHeight();
+
+# Target: badge takes ~28% of the screen width, preserving aspect.
+target_w = screen_w * 0.28;
+scale = target_w / logo.image.GetWidth();
+logo.scaled = logo.image.Scale (logo.image.GetWidth() * scale,
+                                logo.image.GetHeight() * scale);
+logo.sprite = Sprite (logo.scaled);
+logo.sprite.SetX (Window.GetX() + (screen_w - logo.scaled.GetWidth()) / 2);
+logo.sprite.SetY (Window.GetY() + (screen_h - logo.scaled.GetHeight()) / 2);
+logo.sprite.SetZ (10);
+
+# Gentle fade-in over the first ~0.6s. Plymouth calls refresh at ~50Hz.
+fade_step = 0;
+fade_total = 30;   # 30 frames @ 50Hz ≈ 0.6s
+logo.sprite.SetOpacity (0);
+fun refresh_callback () {
+    if (fade_step < fade_total) {
+        fade_step++;
+        logo.sprite.SetOpacity (fade_step / fade_total);
+    }
+}
+Plymouth.SetRefreshFunction (refresh_callback);
+
+# Stay quiet on boot messages (the kiosk runs single-purpose; users don't
+# need to see kernel chatter). Optional: subtle bottom-of-screen status.
+status = "boot";
+fun display_normal_callback () { status = "boot"; }
+fun display_password_callback (prompt, bullets) { status = "password"; }
+fun display_question_callback (prompt, entry)   { status = "question"; }
+fun display_message_callback (text)             { }
+fun quit_callback () { }
+
+Plymouth.SetDisplayNormalFunction       (display_normal_callback);
+Plymouth.SetDisplayPasswordFunction     (display_password_callback);
+Plymouth.SetDisplayQuestionFunction     (display_question_callback);
+Plymouth.SetMessageFunction             (display_message_callback);
+Plymouth.SetQuitFunction                (quit_callback);

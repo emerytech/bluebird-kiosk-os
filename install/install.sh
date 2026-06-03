@@ -188,6 +188,12 @@ APT_PACKAGES=(
   # silently fails with "Call to Reboot failed: Access denied".
   polkitd
 
+  # Boot splash — Plymouth shows the Legacy Wall badge from initramfs
+  # handoff through to greetd. plymouth-themes brings in the default
+  # themes (we activate `bluebird` later); plymouth-x11 isn't needed
+  # since we're Wayland-only.
+  plymouth plymouth-themes
+
   # Maintenance
   sudo systemd systemd-timesyncd unattended-upgrades ca-certificates
 
@@ -423,6 +429,65 @@ else
   rm -f /etc/systemd/logind.conf.d/bluebird-kiosk.conf
   systemctl unmask getty@tty2.service getty@tty3.service getty@tty4.service \
     getty@tty5.service getty@tty6.service 2>/dev/null || true
+fi
+
+# ── Boot splash (Plymouth) + GRUB tweaks ─────────────────────────────────────
+# Plymouth shows the Legacy Wall badge from initramfs handoff through to
+# greetd starting sway. Theme files were dropped by the live-build includes
+# step into /usr/share/plymouth/themes/bluebird/; here we just activate it.
+#
+# `plymouth-set-default-theme -R` rebuilds the initramfs with the new theme
+# embedded — without -R the splash won't appear until the next manual
+# `update-initramfs -u`.
+if command -v plymouth-set-default-theme >/dev/null 2>&1 \
+     && [[ -d /usr/share/plymouth/themes/bluebird ]]; then
+  log "activating Plymouth boot splash (theme: bluebird)"
+  plymouth-set-default-theme -R bluebird >/dev/null 2>&1 || \
+    warn "  plymouth-set-default-theme failed — splash may not appear; initramfs rebuild needed"
+else
+  warn "  plymouth not installed or bluebird theme missing — skipping boot splash"
+fi
+
+# GRUB: hide the menu but keep it Esc-interruptible, narrow the timeout
+# to 1s, pass `quiet splash` so Plymouth takes over the boot output, and
+# stamp the distributor name so the boot menu entries read "BlueBird Kiosk"
+# instead of "Debian" / "Ubuntu". All edits are idempotent (sed in place).
+if [[ -f /etc/default/grub ]]; then
+  log "configuring GRUB for silent splash boot"
+  GRUB_TMP="$(mktemp)"
+  cp /etc/default/grub "$GRUB_TMP"
+  # quiet splash on the linux cmdline. Replace whatever's there (preserve
+  # any other flags the operator added by appending if not already present).
+  if grep -q '^GRUB_CMDLINE_LINUX_DEFAULT=' "$GRUB_TMP"; then
+    sed -i 's|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT="quiet splash"|' "$GRUB_TMP"
+  else
+    printf 'GRUB_CMDLINE_LINUX_DEFAULT="quiet splash"\n' >> "$GRUB_TMP"
+  fi
+  # Hide the menu by default; Esc gets it back for recovery.
+  if grep -q '^GRUB_TIMEOUT_STYLE=' "$GRUB_TMP"; then
+    sed -i 's|^GRUB_TIMEOUT_STYLE=.*|GRUB_TIMEOUT_STYLE=hidden|' "$GRUB_TMP"
+  else
+    printf 'GRUB_TIMEOUT_STYLE=hidden\n' >> "$GRUB_TMP"
+  fi
+  if grep -q '^GRUB_TIMEOUT=' "$GRUB_TMP"; then
+    sed -i 's|^GRUB_TIMEOUT=.*|GRUB_TIMEOUT=1|' "$GRUB_TMP"
+  else
+    printf 'GRUB_TIMEOUT=1\n' >> "$GRUB_TMP"
+  fi
+  if grep -q '^GRUB_DISTRIBUTOR=' "$GRUB_TMP"; then
+    sed -i 's|^GRUB_DISTRIBUTOR=.*|GRUB_DISTRIBUTOR="BlueBird Kiosk"|' "$GRUB_TMP"
+  else
+    printf 'GRUB_DISTRIBUTOR="BlueBird Kiosk"\n' >> "$GRUB_TMP"
+  fi
+  install -m 0644 "$GRUB_TMP" /etc/default/grub
+  rm -f "$GRUB_TMP"
+  # `update-grub` is a Debian/Ubuntu wrapper for grub-mkconfig.
+  if command -v update-grub >/dev/null 2>&1; then
+    update-grub >/dev/null 2>&1 || warn "  update-grub returned non-zero"
+  else
+    grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1 || \
+      warn "  grub-mkconfig not found — boot menu config not refreshed"
+  fi
 fi
 
 # ── Record installed version ─────────────────────────────────────────────────

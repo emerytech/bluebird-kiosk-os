@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=BlueBird
+Description=BlueBird Kiosk OS — Legacy Wall boot splash
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/bluebird
+ScriptFile=/usr/share/plymouth/themes/bluebird/bluebird.script
