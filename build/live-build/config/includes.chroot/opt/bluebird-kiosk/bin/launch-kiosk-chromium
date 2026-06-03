@@ -88,7 +88,7 @@ exec /usr/bin/chromium \
   --no-first-run \
   --disable-pinch \
   --overscroll-history-navigation=0 \
-  --disable-features=TranslateUI \
+  --disable-features=TranslateUI,BlockInsecurePrivateNetworkRequests,PrivateNetworkAccessSendPreflights,PrivateNetworkAccessRespectPreflightResults \
   --password-store=basic \
   --check-for-update-interval=604800 \
   --start-fullscreen \
