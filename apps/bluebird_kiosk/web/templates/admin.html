@@ -19,7 +19,11 @@
               aria-label="Close admin overlay">✕</button>
     </header>
 
-    <section id="login" class="card pin-card">
+    <!-- Hidden by default. admin.js decides at startup whether to show
+         this (no preauth token in URL) or the panels (preauth present).
+         Without `display:none` here, the PIN screen flashes for one paint
+         frame before JS runs even when we're going to bypass it. -->
+    <section id="login" class="card pin-card" style="display:none">
       <div class="pin-title">🔒 Admin Mode</div>
       <div class="pin-sub">Enter your device PIN to continue</div>
       <div class="pin-dots" id="pin-dots">
