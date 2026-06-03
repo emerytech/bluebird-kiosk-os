@@ -210,16 +210,30 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${APT
 # build from the xtradeb PPA — community-maintained, ships /usr/bin/chromium
 # as a regular binary wrapper.
 if [[ "$IS_UBUNTU" -eq 1 ]]; then
-  log "Ubuntu: removing snap chromium + installing real apt chromium from xtradeb PPA"
+  log "Ubuntu: ensuring real apt chromium from xtradeb PPA (not the snap)"
   # Yank the snap variant if a previous installer or apt brought it in.
+  # Only rm /usr/bin/chromium if it's a symlink (the snap-shim chain we
+  # used to install). A real apt-managed chromium leaves a regular file
+  # there and we must NOT delete it — apt won't repopulate it on
+  # re-install without --reinstall.
+  if [[ -L /usr/bin/chromium ]]; then
+    log "  removing stale /usr/bin/chromium symlink → $(readlink /usr/bin/chromium)"
+    rm -f /usr/bin/chromium
+  fi
+  rm -f /snap/bin/chromium 2>/dev/null || true
   snap remove chromium 2>/dev/null || true
   apt-get remove --purge -y chromium-browser 2>/dev/null || true
-  rm -f /usr/bin/chromium /snap/bin/chromium
   # Add the PPA (idempotent — add-apt-repository -y is safe to re-run).
   apt-get install -y --no-install-recommends software-properties-common
   add-apt-repository -y ppa:xtradeb/apps
   apt-get update -qq
-  apt-get install -y --no-install-recommends chromium
+  # Install (or reinstall to repopulate files if a previous run deleted the
+  # binary while leaving the package installed).
+  if dpkg -s chromium >/dev/null 2>&1 && [[ ! -x /usr/bin/chromium ]]; then
+    apt-get install --reinstall -y --no-install-recommends chromium
+  else
+    apt-get install -y --no-install-recommends chromium
+  fi
   if [[ ! -x /usr/bin/chromium ]]; then
     die "Ubuntu: xtradeb chromium install left no /usr/bin/chromium — investigate before continuing"
   fi
