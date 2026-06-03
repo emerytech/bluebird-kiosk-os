@@ -529,20 +529,30 @@ document.getElementById('btn-console-refresh').addEventListener('click', console
 document.getElementById('btn-net-scan').addEventListener('click', loadNetwork);
 document.getElementById('btn-hidden-connect').addEventListener('click', connectHiddenNetwork);
 
-setTab('network');
+// Set the default tab WITHOUT calling its loader yet — we don't know if
+// we have a session token until we check the ?preauth= URL param below.
+function _setTabNoLoad(name) {
+  document.querySelectorAll('.tabs button').forEach((b) =>
+    b.classList.toggle('active', b.dataset.tab === name)
+  );
+  document.querySelectorAll('.pane').forEach((p) =>
+    p.classList.toggle('active', p.dataset.tab === name)
+  );
+}
+_setTabNoLoad('network');
 
 // If we were opened with ?preauth=<token>, skip the PIN screen. This is
 // the path the cloud BlueBird admin uses — the operator already
 // authenticated upstream and asking for the device PIN here is a third
 // auth hop. We strip the token from the URL bar immediately so it isn't
-// visible to anyone glancing at the window or recorded in any history.
+// visible to anyone glancing at the window.
 const _preauth = new URLSearchParams(window.location.search).get('preauth');
 if (_preauth) {
   sessionToken = _preauth;
   try {
     history.replaceState({}, '', window.location.pathname);
   } catch (e) { /* ignore — pageshow flow doesn't always allow replaceState */ }
-  showPanels();
+  showPanels();  // calls loadNetwork() with the token in place
 } else {
   showLogin();
 }
