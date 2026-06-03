@@ -379,6 +379,11 @@ document.querySelectorAll('.tabs button').forEach((b) =>
 document.getElementById('btn-disp-apply').addEventListener('click', applyDisplay);
 document.getElementById('btn-kiosk-restart').addEventListener('click', restartKiosk);
 document.getElementById('btn-return-to-kiosk').addEventListener('click', returnToKiosk);
+// Top-bar ✕ close button — same action as Return to Kiosk, available from
+// every tab and even from the PIN screen (so a staff member who opened
+// the overlay by accident can dismiss it without entering the PIN).
+const btnCloseOverlay = document.getElementById('btn-close-overlay');
+if (btnCloseOverlay) btnCloseOverlay.addEventListener('click', returnToKiosk);
 document.getElementById('btn-kiosk-slug').addEventListener('click', changeSlug);
 document.getElementById('btn-sys-reboot').addEventListener('click', rebootSystem);
 document.getElementById('btn-sys-shutdown').addEventListener('click', shutdownSystem);

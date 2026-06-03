@@ -300,6 +300,31 @@ label {
 .brand small {
   color: var(--bb-muted);
 }
+.overlay-close {
+  /* Top-right ✕ button on the admin overlay header. Big touch target,
+     subdued color until hover/touch — operator can dismiss the overlay
+     from any tab (including the PIN screen) without hunting. */
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--bb-border);
+  color: var(--bb-muted);
+  font-size: 20px;
+  line-height: 1;
+  width: 48px;
+  height: 48px;
+  border-radius: 8px;
+  cursor: pointer;
+  padding: 0;
+  margin: 0;
+  flex: 0 0 auto;
+}
+.overlay-close:hover,
+.overlay-close:active,
+.overlay-close:focus {
+  background: var(--bb-danger, #b14a4a);
+  color: #fff;
+  border-color: transparent;
+}
 .card {
   background: var(--bb-card);
   border: 1px solid var(--bb-border);

@@ -23,17 +23,39 @@ pkill -f -- "--user-data-dir=$USER_DATA_DIR" 2>/dev/null || true
 sleep 0.5
 
 # The kiosk Chromium is fullscreen, and sway's global fullscreen state hides
-# every other window. Unfullscreen it before launching the overlay so our
-# admin window actually appears. A small for_window rule re-fullscreens the
-# kiosk when the admin window closes (see bluebird-locked.conf).
-if command -v swaymsg >/dev/null 2>&1; then
-  # Find the running sway socket (varies by sway PID across boots).
-  SWAY_SOCK="$(ls /run/user/$(id -u)/sway-ipc.$(id -u).*.sock 2>/dev/null | head -1 || true)"
-  if [[ -n "${SWAY_SOCK:-}" ]]; then
-    SWAYSOCK="$SWAY_SOCK" swaymsg \
-      '[app_id="chrome-.*legacy-wall.*"] fullscreen disable' >/dev/null 2>&1 || true
+# every other window. Unfullscreen the kiosk before AND after launching the
+# admin Chromium — `--kiosk --start-fullscreen` makes chromium re-assert
+# fullscreen via the Wayland protocol immediately after a fresh respawn,
+# so one shot isn't enough to win the race. The for_window rule for the
+# admin window also sets `sticky enable`, which keeps it visible even when
+# another window is in sway's global fullscreen state.
+unfullscreen_kiosk() {
+  if ! command -v swaymsg >/dev/null 2>&1; then
+    return
   fi
-fi
+  local sock
+  sock="${SWAYSOCK:-}"
+  if [[ -z "$sock" ]]; then
+    sock="$(ls /run/user/$(id -u)/sway-ipc.$(id -u).*.sock 2>/dev/null | head -1 || true)"
+  fi
+  [[ -z "$sock" ]] && return
+  SWAYSOCK="$sock" swaymsg \
+    '[app_id="chrome-.*legacy-wall.*"] fullscreen disable' >/dev/null 2>&1 || true
+}
+
+# Pre-launch unfullscreen so the admin chromium's first map sees a
+# non-fullscreen workspace.
+unfullscreen_kiosk
+
+# Spawn a background watcher that re-asserts unfullscreen for ~3 s after
+# admin launch, in case chromium re-requests fullscreen post-map. The
+# loop exits on its own.
+(
+  for i in 1 2 3 4 5 6; do
+    sleep 0.25
+    unfullscreen_kiosk
+  done
+) &
 
 exec /usr/bin/chromium \
   --ozone-platform=wayland \

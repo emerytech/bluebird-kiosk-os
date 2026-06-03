@@ -10,10 +10,13 @@
   <div class="shell">
     <header class="brand">
       <div class="dot"></div>
-      <div>
+      <div style="flex:1">
         <h1>Kiosk Admin</h1>
         <small>v{{ version }}</small>
       </div>
+      <button id="btn-close-overlay" class="overlay-close"
+              title="Close admin and return to slideshow"
+              aria-label="Close admin overlay">✕</button>
     </header>
 
     <section id="login" class="card pin-card">
