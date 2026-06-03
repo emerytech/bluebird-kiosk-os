@@ -197,23 +197,35 @@ APT_PACKAGES=(
 
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${APT_PACKAGES[@]}"
 
-# Ubuntu-specific: the chromium package above is a transitional snap.
-# Make /usr/bin/chromium resolve to whatever the snap actually installed,
-# so the hard-coded launcher paths (launch-kiosk-chromium et al.) work.
-if [[ "$IS_UBUNTU" -eq 1 && ! -e /usr/bin/chromium ]]; then
-  CHROMIUM_BIN=""
-  for cand in /snap/bin/chromium /usr/bin/chromium-browser /usr/bin/chromium-snap; do
-    [[ -x "$cand" ]] && CHROMIUM_BIN="$cand" && break
-  done
-  if [[ -n "$CHROMIUM_BIN" ]]; then
-    log "Ubuntu: symlinking /usr/bin/chromium → $CHROMIUM_BIN"
-    ln -sf "$CHROMIUM_BIN" /usr/bin/chromium
-  else
-    warn "Ubuntu: chromium-browser installed but no binary found at the expected"
-    warn "  paths (/snap/bin/chromium, /usr/bin/chromium-browser). The kiosk"
-    warn "  launchers will fail until /usr/bin/chromium exists. Try:"
-    warn "    sudo snap install chromium && sudo ln -sf /snap/bin/chromium /usr/bin/chromium"
+# Ubuntu-specific Chromium handling. The default `chromium-browser` apt
+# package is a transitional snap, and snap Chromium can't be a kiosk
+# browser (sandbox blocks --user-data-dir outside snap-confined paths,
+# Wayland interface needs explicit connection). Swap to a real apt-managed
+# build from the xtradeb PPA — community-maintained, ships /usr/bin/chromium
+# as a regular binary wrapper.
+if [[ "$IS_UBUNTU" -eq 1 ]]; then
+  log "Ubuntu: removing snap chromium + installing real apt chromium from xtradeb PPA"
+  # Yank the snap variant if a previous installer or apt brought it in.
+  snap remove chromium 2>/dev/null || true
+  apt-get remove --purge -y chromium-browser 2>/dev/null || true
+  rm -f /usr/bin/chromium /snap/bin/chromium
+  # Add the PPA (idempotent — add-apt-repository -y is safe to re-run).
+  apt-get install -y --no-install-recommends software-properties-common
+  add-apt-repository -y ppa:xtradeb/apps
+  apt-get update -qq
+  apt-get install -y --no-install-recommends chromium
+  if [[ ! -x /usr/bin/chromium ]]; then
+    die "Ubuntu: xtradeb chromium install left no /usr/bin/chromium — investigate before continuing"
   fi
+  # Ubuntu 23.10+ restricts unprivileged user namespaces via AppArmor,
+  # which Chromium's sandbox depends on. Without this sysctl, every
+  # `/usr/bin/chromium` invocation under sway dies with "No usable
+  # sandbox!" before painting anything. The setting is harmless on a
+  # single-purpose kiosk (we run one trusted Chromium and nothing else).
+  log "Ubuntu: enabling unprivileged user namespaces (chromium sandbox prereq)"
+  sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 >/dev/null
+  printf 'kernel.apparmor_restrict_unprivileged_userns=0\n' \
+    > /etc/sysctl.d/60-bluebird-kiosk-userns.conf
 fi
 
 # ── User + directories ───────────────────────────────────────────────────────
