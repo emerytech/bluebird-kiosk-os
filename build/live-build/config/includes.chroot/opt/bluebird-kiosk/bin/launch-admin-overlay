@@ -22,6 +22,19 @@ pkill -f -- "--user-data-dir=$USER_DATA_DIR" 2>/dev/null || true
 # Brief wait so chromium releases the singleton lock + closes its windows.
 sleep 0.5
 
+# The kiosk Chromium is fullscreen, and sway's global fullscreen state hides
+# every other window. Unfullscreen it before launching the overlay so our
+# admin window actually appears. A small for_window rule re-fullscreens the
+# kiosk when the admin window closes (see bluebird-locked.conf).
+if command -v swaymsg >/dev/null 2>&1; then
+  # Find the running sway socket (varies by sway PID across boots).
+  SWAY_SOCK="$(ls /run/user/$(id -u)/sway-ipc.$(id -u).*.sock 2>/dev/null | head -1 || true)"
+  if [[ -n "${SWAY_SOCK:-}" ]]; then
+    SWAYSOCK="$SWAY_SOCK" swaymsg \
+      '[app_id="chrome-.*legacy-wall.*"] fullscreen disable' >/dev/null 2>&1 || true
+  fi
+fi
+
 exec /usr/bin/chromium \
   --ozone-platform=wayland \
   --new-window \
