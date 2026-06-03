@@ -447,17 +447,31 @@ fi
 
 # ── Boot splash (Plymouth) + GRUB tweaks ─────────────────────────────────────
 # Plymouth shows the Legacy Wall badge from initramfs handoff through to
-# greetd starting sway. Theme files were dropped by the live-build includes
-# step into /usr/share/plymouth/themes/bluebird/; here we just activate it.
+# greetd starting sway.
 #
-# `plymouth-set-default-theme -R` rebuilds the initramfs with the new theme
-# embedded — without -R the splash won't appear until the next manual
-# `update-initramfs -u`.
-if command -v plymouth-set-default-theme >/dev/null 2>&1 \
-     && [[ -d /usr/share/plymouth/themes/bluebird ]]; then
+# Step 1: drop the bluebird theme files into the system Plymouth theme dir.
+# (The earlier `install -m 0755 .../opt/bluebird-kiosk/bin/*` glob only
+# touches /opt; theme files need their own copy.)
+THEME_SRC="$LIVE_BUILD_INC/usr/share/plymouth/themes/bluebird"
+if [[ -d "$THEME_SRC" ]]; then
+  log "installing Plymouth theme files (bluebird)"
+  install -d /usr/share/plymouth/themes/bluebird
+  install -m 0644 \
+    "$THEME_SRC/bluebird.plymouth" \
+    "$THEME_SRC/bluebird.script" \
+    "$THEME_SRC/logo.png" \
+    /usr/share/plymouth/themes/bluebird/
+fi
+
+# Step 2: activate the theme + rebuild initramfs (-R). On Debian/Ubuntu the
+# binary lives in /usr/sbin/, which isn't in non-interactive sudo's
+# stripped PATH — call by absolute path.
+PLY_BIN=/usr/sbin/plymouth-set-default-theme
+if [[ -x "$PLY_BIN" && -d /usr/share/plymouth/themes/bluebird ]]; then
   log "activating Plymouth boot splash (theme: bluebird)"
-  plymouth-set-default-theme -R bluebird >/dev/null 2>&1 || \
+  if ! "$PLY_BIN" -R bluebird >/dev/null 2>&1; then
     warn "  plymouth-set-default-theme failed — splash may not appear; initramfs rebuild needed"
+  fi
 else
   warn "  plymouth not installed or bluebird theme missing — skipping boot splash"
 fi
