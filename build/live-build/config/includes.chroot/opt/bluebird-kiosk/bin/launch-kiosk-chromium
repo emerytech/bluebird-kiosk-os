@@ -98,6 +98,29 @@ if [[ -f "${CACHE_EXT_DIR}/manifest.json" ]]; then
   EXT_FLAG="--load-extension=${CACHE_EXT_DIR}"
 fi
 
+# NOTE: `--incognito` was REMOVED 2026-06-04.
+#
+# Chromium silently disables --load-extension when --incognito is also
+# set (the extension is loaded but not "allow in incognito" — there's
+# no CLI flag to enable that, only the per-extension toggle in
+# chrome://extensions, which we can't drive on a headless kiosk). The
+# DNR rules that redirect media requests to our local cache wouldn't
+# fire. Field-confirmed: 0 chromium-originated requests reached the
+# local server until --incognito was dropped.
+#
+# We replace its state-resetting effect with --user-data-dir pointed
+# at a directory we wipe on each launch. Net effect:
+#   - Same "fresh profile every boot" behavior (no cookie/history
+#     buildup, no auth carryover, no autofill leaks)
+#   - PLUS: extensions actually run
+#   - PLUS: HTTP cache persists ACROSS the launch (we wipe the dir
+#     BEFORE chromium starts, then chromium populates it; on the
+#     next reboot the previous cache is gone) — same as incognito.
+KIOSK_PROFILE_DIR=/var/lib/bluebird-kiosk/kiosk-chromium
+rm -rf "$KIOSK_PROFILE_DIR" 2>/dev/null || true
+install -d -o bluebird-kiosk -g bluebird-kiosk "$KIOSK_PROFILE_DIR" 2>/dev/null || \
+  mkdir -p "$KIOSK_PROFILE_DIR"
+
 exec /usr/bin/chromium \
   --kiosk \
   --ozone-platform=wayland \
@@ -109,7 +132,7 @@ exec /usr/bin/chromium \
   --password-store=basic \
   --check-for-update-interval=604800 \
   --start-fullscreen \
-  --incognito \
+  --user-data-dir="$KIOSK_PROFILE_DIR" \
   ${EXT_FLAG} \
   --user-agent="${DEFAULT_UA} ${UA_SUFFIX}" \
   --allow-running-insecure-content \
