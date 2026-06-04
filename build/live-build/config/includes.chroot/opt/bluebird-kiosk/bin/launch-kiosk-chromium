@@ -118,8 +118,23 @@ fi
 #     next reboot the previous cache is gone) — same as incognito.
 KIOSK_PROFILE_DIR=/var/lib/bluebird-kiosk/kiosk-chromium
 rm -rf "$KIOSK_PROFILE_DIR" 2>/dev/null || true
-install -d -o bluebird-kiosk -g bluebird-kiosk "$KIOSK_PROFILE_DIR" 2>/dev/null || \
-  mkdir -p "$KIOSK_PROFILE_DIR"
+mkdir -p "$KIOSK_PROFILE_DIR/Default"
+
+# Pre-seed Preferences with extensions.ui.developer_mode = true.
+# Chromium 137+ silently rejects --load-extension when developer mode
+# is off in the profile, regardless of CLI feature flags. There is no
+# CLI override — the toggle lives in chrome://extensions, which we
+# can't drive on a headless kiosk. So we write the pref by hand. The
+# launcher wipes $KIOSK_PROFILE_DIR on every start, so this file is
+# always present and fresh.
+cat > "$KIOSK_PROFILE_DIR/Default/Preferences" <<'PREF'
+{
+  "extensions": {
+    "ui": {"developer_mode": true}
+  }
+}
+PREF
+chown -R bluebird-kiosk:bluebird-kiosk "$KIOSK_PROFILE_DIR" 2>/dev/null || true
 
 # --disable-features list:
 #   TranslateUI                                   — kill the "translate?" infobar
