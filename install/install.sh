@@ -285,6 +285,12 @@ rsync -a --delete "$KIOSK_OS/apps/bluebird_gesture/" /opt/bluebird-kiosk/src/blu
 log "staging chromium cache-extension"
 install -d /opt/bluebird-kiosk/share/cache-ext
 rsync -a --delete "$KIOSK_OS/apps/bluebird_kiosk_cache_ext/" /opt/bluebird-kiosk/share/cache-ext/
+# Chromium writes its compiled DNR ruleset into
+# <ext>/_metadata/generated_indexed_rulesets/ on first load. Without
+# write perms, extension load fails with "Internal error while parsing
+# rules" (field-verified 2026-06-04 via --enable-logging=stderr).
+# Owner the whole dir to bluebird-kiosk so chromium's user can write.
+chown -R bluebird-kiosk:bluebird-kiosk /opt/bluebird-kiosk/share/cache-ext/
 
 # ── Drop /etc and /opt files ─────────────────────────────────────────────────
 log "installing systemd units"
