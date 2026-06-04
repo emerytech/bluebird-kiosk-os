@@ -423,10 +423,20 @@ def create_app() -> FastAPI:
     @app.get("/admin/kiosk/state", dependencies=[Depends(require_admin)])
     async def admin_kiosk_state():
         cfg = config.read_config()
+        # The `url` field is what the admin overlay shows as "the slideshow
+        # URL". Since 2026-06-04 Chromium loads the local renderer
+        # (http://127.0.0.1:7311/legacy-wall), not the cloud one — so
+        # LEGACY_WALL_URL is now always local and useless as a "what tenant
+        # is this kiosk on?" signal. Reconstruct the public cloud URL from
+        # backend + slug for the admin display.
+        backend = (cfg.get("BLUEBIRD_BACKEND") or "").rstrip("/")
+        slug = (cfg.get("SCHOOL_SLUG") or "").strip("/")
+        cloud_url = f"{backend}/{slug}/legacy-wall" if backend and slug else ""
         return JSONResponse(
             {
                 "slug": cfg.get("SCHOOL_SLUG"),
-                "url": cfg.get("LEGACY_WALL_URL"),
+                "url": cloud_url,                          # tenant-identifying (cloud)
+                "chromium_url": cfg.get("LEGACY_WALL_URL"),  # what chromium loads (local)
                 "device_id": cfg.get("DEVICE_ID"),
                 "backend": cfg.get("BLUEBIRD_BACKEND"),
                 "version": __version__,

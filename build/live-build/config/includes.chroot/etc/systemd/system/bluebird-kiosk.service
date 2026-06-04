@@ -1,8 +1,14 @@
 [Unit]
-Description=BlueBird Legacy Wall kiosk (sway + chromium fullscreen)
+Description=BlueBird Legacy Wall kiosk (sway + chromium fullscreen) — STANDBY
 After=bluebird-admin.service network-online.target
 Wants=bluebird-admin.service network-online.target
 ConditionPathExists=/etc/bluebird/configured
+# Mutual exclusion with greetd — they both want to own VT1 and the DRM
+# seat. greetd is the canonical session owner; if it's active, we MUST
+# stay out of its way or we crash-loop fighting for the seat (observed
+# 2026-06-04: 15 restart-counter increments in <60s).
+Conflicts=greetd.service
+After=greetd.service
 
 [Service]
 Type=simple
@@ -23,5 +29,20 @@ StandardInput=tty
 StandardOutput=journal
 StandardError=journal
 
-[Install]
-WantedBy=bluebird-kiosk.target
+# NO [Install] SECTION — this unit must NEVER be auto-enabled.
+#
+# In the current kiosk-os layout, sway is launched by greetd as the
+# bluebird-kiosk user's initial_session (see /etc/greetd/config.toml).
+# greetd handles PAM, VT acquisition, and respawn — everything this
+# service used to do.
+#
+# This unit file is kept as a *standby* fallback: if a fleet operator
+# ever needs to run sway as a system service instead of via greetd
+# (e.g. for a headless debug capture, or while diagnosing a greetd
+# failure), they can `systemctl start bluebird-kiosk.service` by hand
+# AFTER stopping greetd. The Conflicts= directive above ensures they
+# can't both be active simultaneously.
+#
+# Removing [Install] also prevents systemd's preset machinery from
+# silently re-enabling this on package upgrades, which is what caused
+# the field-observed crash-loop above.

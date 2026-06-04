@@ -399,6 +399,14 @@ systemctl set-default bluebird-kiosk.target
 #   - sway is launched by greetd's session command, not by a standalone unit
 #   - the firstboot wizard is picked by sway's launch-bluebird-session dispatcher
 #     based on whether /etc/bluebird/configured exists
+#
+# Defensive disable: on upgrades from a pre-2026-06-04 build, the
+# bluebird-kiosk.service unit had a [Install] section so systemd's
+# preset machinery would auto-enable it. Together with greetd that
+# caused a VT/DRM crash-loop. The new unit file has no [Install]
+# block, but `disable` here also clears any leftover symlinks from
+# the previous install state — idempotent + safe on fresh systems.
+systemctl disable bluebird-kiosk.service 2>/dev/null || true
 
 # ── SSH for remote management (always — operator + auto-update need it) ─────
 # openssh-server is installed + enabled unconditionally now. The hardening
