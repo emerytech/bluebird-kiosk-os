@@ -73,22 +73,24 @@ if [[ -n "${KIOSK_URL:-}" ]]; then
   URL="$KIOSK_URL"
 fi
 
-# Cloud Legacy Wall reads ?cache_host=… and (via a small inline JS shim
-# at the top of the body) rewrites every image URL to point at the
-# kiosk's local FastAPI server. The local server returns cached bytes
-# in 25-170 ms from disk and 302s to cloud on miss. This is how we get
-# instant per-image transitions WITHOUT building a separate local
-# dashboard — the cloud page renders exactly as it always has, only
-# the image fetches are diverted.
+# Cloud Legacy Wall reads ?kiosk_cache=1 and (via a small inline JS
+# shim at the top of the body) rewrites every image URL to point at
+# the kiosk's local FastAPI server. The local server returns cached
+# bytes in 25-170 ms from disk and 302s to cloud on miss. This is how
+# we get instant per-image transitions WITHOUT building a separate
+# local dashboard — the cloud page renders exactly as it always has,
+# only the image fetches are diverted.
 #
-# Only adds the param to cloud URLs (not to the local-fallback URL or
-# operator-overrides), and skips if a query string is already present
-# so we don't double-encode.
-if [[ "$URL" == "$CLOUD_URL" && "$URL" != *"cache_host="* ]]; then
+# Param is a bare flag (not ?cache_host=http://…) because Cloudflare's
+# WAF rejects URLs with an http:// in the query as suspected SSRF
+# (returns 403 before our origin even sees the request). The kiosk's
+# local server is always at 127.0.0.1:7311 anyway, so the shim
+# hardcodes that target — no need to thread the value through.
+if [[ "$URL" == "$CLOUD_URL" && "$URL" != *"kiosk_cache=1"* ]]; then
   if [[ "$URL" == *\?* ]]; then
-    URL="${URL}&cache_host=http://127.0.0.1:${ADMIN_PORT}"
+    URL="${URL}&kiosk_cache=1"
   else
-    URL="${URL}?cache_host=http://127.0.0.1:${ADMIN_PORT}"
+    URL="${URL}?kiosk_cache=1"
   fi
 fi
 
