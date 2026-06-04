@@ -121,6 +121,17 @@ rm -rf "$KIOSK_PROFILE_DIR" 2>/dev/null || true
 install -d -o bluebird-kiosk -g bluebird-kiosk "$KIOSK_PROFILE_DIR" 2>/dev/null || \
   mkdir -p "$KIOSK_PROFILE_DIR"
 
+# --disable-features list:
+#   TranslateUI                                   — kill the "translate?" infobar
+#   BlockInsecurePrivateNetworkRequests           ┐ allow https page →
+#   PrivateNetworkAccessSendPreflights            │ http://127.0.0.1 fetch
+#   PrivateNetworkAccessRespectPreflightResults   ┘ (PNA opt-out)
+#   DisableLoadExtensionCommandLineSwitch         — Chromium 137+ silently
+#       ignores --load-extension unless this flag is disabled (or the
+#       user toggles Developer Mode in chrome://extensions, which we
+#       can't drive headlessly). Without this, the cache extension
+#       below loads to nowhere and the kiosk still hits cloud for every
+#       image. Field-confirmed 2026-06-04.
 exec /usr/bin/chromium \
   --kiosk \
   --ozone-platform=wayland \
@@ -128,7 +139,7 @@ exec /usr/bin/chromium \
   --no-first-run \
   --disable-pinch \
   --overscroll-history-navigation=0 \
-  --disable-features=TranslateUI,BlockInsecurePrivateNetworkRequests,PrivateNetworkAccessSendPreflights,PrivateNetworkAccessRespectPreflightResults \
+  --disable-features=TranslateUI,BlockInsecurePrivateNetworkRequests,PrivateNetworkAccessSendPreflights,PrivateNetworkAccessRespectPreflightResults,DisableLoadExtensionCommandLineSwitch \
   --password-store=basic \
   --check-for-update-interval=604800 \
   --start-fullscreen \
