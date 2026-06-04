@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "BlueBird Kiosk Cache Redirect",
+  "version": "1.0.0",
+  "description": "Redirects Legacy Wall media-image requests from the cloud (bluebird-alerts.com) to the local on-device cache served by bluebird-admin.service at 127.0.0.1:7311. The local server returns cached bytes when present and 302-redirects back to the cloud on cache miss, so the dashboard never breaks even before the sync catches up.",
+  "incognito": "spanning",
+  "permissions": [
+    "declarativeNetRequest"
+  ],
+  "host_permissions": [
+    "https://bluebird-alerts.com/*",
+    "https://bluebirdalerts.com/*",
+    "http://127.0.0.1/*"
+  ],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "ruleset_1",
+        "enabled": true,
+        "path": "rules.json"
+      }
+    ]
+  }
+}

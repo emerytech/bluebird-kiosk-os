@@ -81,6 +81,23 @@ KIOSK_VERSION="$(cat /opt/bluebird-kiosk/VERSION 2>/dev/null || echo 0.0.0)"
 UA_SUFFIX="BlueBirdKiosk/${KIOSK_VERSION}"
 DEFAULT_UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
 
+# Bundled MV3 extension (bluebird_kiosk_cache_ext) intercepts Legacy
+# Wall image requests destined for bluebird-alerts.com and redirects
+# them to http://127.0.0.1:7311/legacy-wall/media/<id>/<image|thumb>.
+# The local admin server serves bytes out of /var/lib/bluebird-kiosk/
+# media/ when present, or 302s back to the cloud on miss. Net effect:
+# the operator sees the regular cloud dashboard (sidebar, lightbox,
+# touch nav) but per-image latency drops from hundreds of ms over WiFi
+# to ~25-170 ms from local SSD.
+#
+# `--allow-running-insecure-content` (already set below) is what lets
+# the HTTPS cloud page load HTTP localhost images via the redirect.
+CACHE_EXT_DIR=/opt/bluebird-kiosk/share/cache-ext
+EXT_FLAG=""
+if [[ -f "${CACHE_EXT_DIR}/manifest.json" ]]; then
+  EXT_FLAG="--load-extension=${CACHE_EXT_DIR}"
+fi
+
 exec /usr/bin/chromium \
   --kiosk \
   --ozone-platform=wayland \
@@ -93,6 +110,7 @@ exec /usr/bin/chromium \
   --check-for-update-interval=604800 \
   --start-fullscreen \
   --incognito \
+  ${EXT_FLAG} \
   --user-agent="${DEFAULT_UA} ${UA_SUFFIX}" \
   --allow-running-insecure-content \
   --app="$URL"

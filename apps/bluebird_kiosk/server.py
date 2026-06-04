@@ -21,7 +21,7 @@ from typing import Dict, Optional
 import os
 import requests
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
@@ -314,6 +314,56 @@ def create_app() -> FastAPI:
             headers={"Cache-Control": "private, max-age=86400"},
         )
 
+    @app.get("/legacy-wall/media/{media_id}/{variant}")
+    async def legacy_wall_media_blob_with_variant(
+        request: Request, media_id: int, variant: str
+    ):
+        """Match the cloud Legacy Wall's image URL shape so a Chromium
+        extension can redirect them to us 1:1.
+
+        Cloud emits image src URLs like:
+            /<slug>/legacy-wall/media/<id>/image
+            /<slug>/legacy-wall/media/<id>/thumb
+
+        The bluebird_kiosk_cache_ext extension (a tiny MV3 redirect
+        rule) rewrites those to:
+            http://127.0.0.1:7311/legacy-wall/media/<id>/image
+            http://127.0.0.1:7311/legacy-wall/media/<id>/thumb
+
+        Behavior here:
+          • variant=image OR thumb — we serve the same on-disk bytes
+            for both. The browser scales the bitmap for thumb spots.
+            Slightly more bandwidth than a true thumb but no extra
+            sync storage. (sync_client only downloads /image variants.)
+          • cache miss — 302 redirect to the cloud URL, so a missing
+            item still appears in the dashboard, just slower for that
+            single fetch. Operator-confirmed behavior 2026-06-04.
+
+        Any variant other than 'image'/'thumb' is rejected — the cloud
+        only ever asks for those two.
+        """
+        if variant not in ("image", "thumb"):
+            raise HTTPException(status_code=404, detail="unknown_variant")
+        cache: KioskLocalCache = request.app.state.local_cache
+        file_path = resolve_media_file_path(cache, int(media_id))
+        if file_path and os.path.isfile(file_path):
+            return FileResponse(
+                path=file_path,
+                headers={"Cache-Control": "private, max-age=86400"},
+            )
+        # Cache miss — fall through to the cloud. The kiosk Chromium has
+        # WAN to bluebird-alerts.com working at this point (we're serving
+        # cached media, but if any specific item didn't sync yet the
+        # cloud is the source of truth). Reconstruct the cloud URL from
+        # the kiosk.conf so it stays correct across tenant changes.
+        cfg = config.read_config()
+        backend = (cfg.get("BLUEBIRD_BACKEND") or "").rstrip("/")
+        slug = (cfg.get("SCHOOL_SLUG") or "").strip("/")
+        if not backend or not slug:
+            raise HTTPException(status_code=404, detail="no_backend_for_fallback")
+        cloud_url = f"{backend}/{slug}/legacy-wall/media/{int(media_id)}/{variant}"
+        return RedirectResponse(url=cloud_url, status_code=302)
+
     # ── Admin overlay (PIN-gated) ────────────────────────────────────────────
 
     def require_admin(
@@ -423,20 +473,10 @@ def create_app() -> FastAPI:
     @app.get("/admin/kiosk/state", dependencies=[Depends(require_admin)])
     async def admin_kiosk_state():
         cfg = config.read_config()
-        # The `url` field is what the admin overlay shows as "the slideshow
-        # URL". Since 2026-06-04 Chromium loads the local renderer
-        # (http://127.0.0.1:7311/legacy-wall), not the cloud one — so
-        # LEGACY_WALL_URL is now always local and useless as a "what tenant
-        # is this kiosk on?" signal. Reconstruct the public cloud URL from
-        # backend + slug for the admin display.
-        backend = (cfg.get("BLUEBIRD_BACKEND") or "").rstrip("/")
-        slug = (cfg.get("SCHOOL_SLUG") or "").strip("/")
-        cloud_url = f"{backend}/{slug}/legacy-wall" if backend and slug else ""
         return JSONResponse(
             {
                 "slug": cfg.get("SCHOOL_SLUG"),
-                "url": cloud_url,                          # tenant-identifying (cloud)
-                "chromium_url": cfg.get("LEGACY_WALL_URL"),  # what chromium loads (local)
+                "url": cfg.get("LEGACY_WALL_URL"),
                 "device_id": cfg.get("DEVICE_ID"),
                 "backend": cfg.get("BLUEBIRD_BACKEND"),
                 "version": __version__,

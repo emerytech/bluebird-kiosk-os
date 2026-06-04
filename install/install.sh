@@ -277,6 +277,15 @@ install -d /opt/bluebird-kiosk/src
 rsync -a --delete "$KIOSK_OS/apps/bluebird_kiosk/" /opt/bluebird-kiosk/src/bluebird_kiosk/
 rsync -a --delete "$KIOSK_OS/apps/bluebird_gesture/" /opt/bluebird-kiosk/src/bluebird_gesture/
 
+# Chromium MV3 extension that redirects Legacy Wall media requests
+# from bluebird-alerts.com to the local /var/lib/bluebird-kiosk/media
+# cache via 127.0.0.1:7311. See apps/bluebird_kiosk_cache_ext/ for the
+# manifest + rules. Loaded by /opt/bluebird-kiosk/bin/launch-kiosk-chromium
+# via --load-extension.
+log "staging chromium cache-extension"
+install -d /opt/bluebird-kiosk/share/cache-ext
+rsync -a --delete "$KIOSK_OS/apps/bluebird_kiosk_cache_ext/" /opt/bluebird-kiosk/share/cache-ext/
+
 # ── Drop /etc and /opt files ─────────────────────────────────────────────────
 log "installing systemd units"
 install -m 0644 "$LIVE_BUILD_INC"/etc/systemd/system/bluebird-*.service \

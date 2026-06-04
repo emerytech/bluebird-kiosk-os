@@ -89,37 +89,28 @@ def is_configured() -> bool:
 
 
 def derive_legacy_wall_url(backend: str, slug: str) -> str:
-    """Return the URL the kiosk Chromium should load on boot.
+    """Return the cloud URL the kiosk Chromium loads.
 
-    Points at the LOCAL renderer at 127.0.0.1:7311/legacy-wall, which
-    reads from the on-disk media cache (/var/lib/bluebird-kiosk/media)
-    populated by bluebird-kiosk-sync.service. This makes image
-    transitions instant and survives WAN outages.
+    Chromium loads the rich cloud-rendered Legacy Wall page (sidebar,
+    collections, lightbox, touch nav, etc) for visual + functional
+    parity with non-kiosk viewers. Per-image latency is then minimized
+    by a bundled Chromium extension (`bluebird_kiosk_cache_ext`) that
+    intercepts requests to `<backend>/<slug>/legacy-wall/media/<id>/...`
+    and redirects them to the local renderer at 127.0.0.1:7311, which
+    serves bytes out of /var/lib/bluebird-kiosk/media. Cache misses
+    fall back through to the cloud via a 302 from the local server.
 
-    The cloud `backend` and `slug` args are kept in the signature for
-    API stability — existing callers (firstboot finalize, admin
-    /admin/kiosk/slug) pass them through. They are validated upstream
-    (BLUEBIRD_BACKEND must be set, slug must resolve) but no longer
-    appear in the URL Chromium loads.
-
-    Field-confirmed (2026-06-04): pointing Chromium at the cloud URL
-    was forcing every slide transition through WAN even though we had
-    761 MB of media already cached locally. Switching here drops
-    per-image latency from hundreds of ms over WiFi to 25-170 ms from
-    local SSD.
-
-    The sync service still talks to the cloud via BLUEBIRD_BACKEND +
-    SCHOOL_SLUG read from kiosk.conf directly — that's how new media
-    reaches the cache.
+    This was originally a redirect to 127.0.0.1 (commit 5734efd) so
+    Chromium loaded a minimal local-only slideshow. That replaced the
+    cloud dashboard wholesale and lost the touch UI / sidebar /
+    sports widgets. The cache-extension approach (this commit) keeps
+    the dashboard intact and only redirects the heavy media requests.
     """
     backend = (backend or "").rstrip("/")
     slug = (slug or "").strip("/")
-    # We still require both values to be set — they're validated during
-    # firstboot to confirm the tenant exists and is reachable, and the
-    # sync loop won't run without them. The legacy URL itself is local.
     if not backend or not slug:
         return ""
-    return "http://127.0.0.1:7311/legacy-wall"
+    return f"{backend}/{slug}/legacy-wall"
 
 
 def get_admin_pin_hash() -> Optional[bytes]:
