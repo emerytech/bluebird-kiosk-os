@@ -9,7 +9,6 @@
   ],
   "host_permissions": [
     "https://bluebird-alerts.com/*",
-    "https://bluebirdalerts.com/*",
     "http://127.0.0.1/*"
   ],
   "declarative_net_request": {

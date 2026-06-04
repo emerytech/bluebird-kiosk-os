@@ -9,22 +9,8 @@
       }
     },
     "condition": {
-      "regexFilter": "^https://bluebird-alerts\\.com/[^/]+/legacy-wall/media/(\\d+)/(image|thumb)(\\?.*)?$",
-      "resourceTypes": ["image", "xmlhttprequest", "media"]
-    }
-  },
-  {
-    "id": 2,
-    "priority": 1,
-    "action": {
-      "type": "redirect",
-      "redirect": {
-        "regexSubstitution": "http://127.0.0.1:7311/legacy-wall/media/\\1/\\2"
-      }
-    },
-    "condition": {
-      "regexFilter": "^https://bluebirdalerts\\.com/[^/]+/legacy-wall/media/(\\d+)/(image|thumb)(\\?.*)?$",
-      "resourceTypes": ["image", "xmlhttprequest", "media"]
+      "regexFilter": "^https://bluebird-alerts\\.com/[^/]+/legacy-wall/media/(\\d+)/(image|thumb)",
+      "resourceTypes": ["image", "xmlhttprequest"]
     }
   }
 ]
