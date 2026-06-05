@@ -243,6 +243,47 @@ async function loadDisplay() {
   }
 }
 
+// Auto-revert countdown state — only one display change can be pending at a
+// time. Cleared on confirm, manual revert, or successful timer expiry.
+let _dispRevertTimer = null;
+let _dispRevertSecondsLeft = 0;
+
+function _dispRevertHide() {
+  if (_dispRevertTimer) {
+    clearInterval(_dispRevertTimer);
+    _dispRevertTimer = null;
+  }
+  const banner = document.getElementById('disp-revert-banner');
+  if (banner) banner.style.display = 'none';
+  // Re-enable the Apply button so the next change is possible.
+  const apply = document.getElementById('btn-disp-apply');
+  if (apply) apply.disabled = false;
+}
+
+function _dispRevertShow(seconds) {
+  const banner = document.getElementById('disp-revert-banner');
+  const countdownEl = document.getElementById('disp-revert-countdown');
+  if (!banner || !countdownEl) return;
+  _dispRevertSecondsLeft = seconds;
+  countdownEl.textContent = String(seconds);
+  banner.style.display = 'block';
+  // Disable Apply while the countdown is running — operator must
+  // confirm or revert before changing again.
+  const apply = document.getElementById('btn-disp-apply');
+  if (apply) apply.disabled = true;
+  if (_dispRevertTimer) clearInterval(_dispRevertTimer);
+  _dispRevertTimer = setInterval(() => {
+    _dispRevertSecondsLeft -= 1;
+    countdownEl.textContent = String(Math.max(0, _dispRevertSecondsLeft));
+    if (_dispRevertSecondsLeft <= 0) {
+      // Server-side timer also fires; we just clean up the UI.
+      _dispRevertHide();
+      toast('Display changes reverted — no confirmation received.', 'error');
+      loadDisplay();  // refresh the dropdowns to reflect reverted state
+    }
+  }, 1000);
+}
+
 async function applyDisplay() {
   const body = {
     output: document.getElementById('disp-output').value,
@@ -255,7 +296,31 @@ async function applyDisplay() {
     method: 'POST',
     body: JSON.stringify(body),
   }).then((r) => r.json());
-  toast(r.messages ? r.messages.join('; ') : 'Applied.', r.ok ? 'success' : 'error');
+  if (!r.ok) {
+    toast(r.messages ? r.messages.join('; ') : 'Failed.', 'error');
+    return;
+  }
+  // If the change is one the server will auto-revert (rotation / mode),
+  // show the countdown banner. Brightness alone has no revert.
+  if (r.revert_in_seconds && r.revert_in_seconds > 0) {
+    _dispRevertShow(r.revert_in_seconds);
+    toast('Display changed. Confirm within ' + r.revert_in_seconds + 's or it reverts.', 'success');
+  } else {
+    toast(r.messages ? r.messages.join('; ') : 'Applied.', 'success');
+  }
+}
+
+async function confirmDisplay() {
+  try { await api('/admin/display/confirm', { method: 'POST' }); } catch (e) {}
+  _dispRevertHide();
+  toast('Display changes kept.', 'success');
+}
+
+async function revertDisplayNow() {
+  try { await api('/admin/display/revert-now', { method: 'POST' }); } catch (e) {}
+  _dispRevertHide();
+  toast('Reverted to previous display settings.', 'success');
+  loadDisplay();
 }
 
 async function loadKiosk() {
@@ -414,6 +479,12 @@ document.querySelectorAll('.tabs button').forEach((b) =>
   b.addEventListener('click', () => setTab(b.dataset.tab))
 );
 document.getElementById('btn-disp-apply').addEventListener('click', applyDisplay);
+{
+  const _bc = document.getElementById('btn-disp-confirm');
+  if (_bc) _bc.addEventListener('click', confirmDisplay);
+  const _br = document.getElementById('btn-disp-revert');
+  if (_br) _br.addEventListener('click', revertDisplayNow);
+}
 document.getElementById('btn-kiosk-restart').addEventListener('click', restartKiosk);
 document.getElementById('btn-return-to-kiosk').addEventListener('click', returnToKiosk);
 // Top-bar ✕ close button — same action as Return to Kiosk, available from

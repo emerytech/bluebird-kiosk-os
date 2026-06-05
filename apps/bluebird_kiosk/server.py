@@ -138,6 +138,12 @@ def create_app() -> FastAPI:
         openapi_url=None,
     )
     app.state.admin_sessions = {}
+    # Single-slot store for the pending display revert. Holds the token
+    # of the most recent /admin/display/apply that needs confirmation;
+    # the auto-revert task checks this against its own token before
+    # restoring. Cleared by /admin/display/confirm (operator approved)
+    # or /admin/display/revert-now (manual revert). See DISPLAY_REVERT_SECONDS.
+    app.state.display_revert_pending = {}
     app.state.local_cache = KioskLocalCache(LOCAL_CACHE_DB)
     app.mount(
         "/static",
@@ -449,9 +455,45 @@ def create_app() -> FastAPI:
             }
         )
 
+    # Auto-revert window for rotation/mode changes — modeled on Windows'
+    # display settings dialog. Operator applies a change, gets 15 seconds
+    # to confirm; otherwise the previous state is restored. Without this,
+    # rotating the kiosk wrong leaves the operator unable to reach the
+    # admin overlay to undo it (field-confirmed 2026-06-04 — required
+    # an SSH hop to fix a Smart Board stuck at 90°).
+    DISPLAY_REVERT_SECONDS = 15
+
+    async def _auto_revert_display(token: str, output: str, prev_transform: str, prev_mode: str):
+        import asyncio as _asyncio
+        await _asyncio.sleep(DISPLAY_REVERT_SECONDS)
+        # If the operator confirmed (or replaced with another change),
+        # our token is no longer the pending one — bail.
+        if app.state.display_revert_pending.get("token") != token:
+            return
+        try:
+            if prev_transform:
+                display.set_rotation(output, prev_transform)
+            if prev_mode:
+                display.set_mode(output, prev_mode)
+        finally:
+            app.state.display_revert_pending.pop("token", None)
+
     @app.post("/admin/display/apply", dependencies=[Depends(require_admin)])
     async def admin_display_apply(body: DisplayBody):
         messages = []
+        # Capture current state BEFORE applying so we can revert. Only
+        # needed when transform or mode changes — brightness can't trap
+        # the operator, so we don't auto-revert it.
+        revert_needed = body.transform is not None or body.mode is not None
+        prev_transform = ""
+        prev_mode = ""
+        if revert_needed:
+            for o in display.list_outputs():
+                if o.name == body.output:
+                    prev_transform = o.transform
+                    prev_mode = o.current_mode
+                    break
+
         if body.transform is not None:
             ok, msg = display.set_rotation(body.output, body.transform)
             messages.append(f"rotation: {msg}")
@@ -467,6 +509,55 @@ def create_app() -> FastAPI:
             messages.append(f"brightness: {msg}")
             if not ok:
                 return JSONResponse({"ok": False, "messages": messages}, status_code=400)
+
+        # Schedule the auto-revert if rotation/mode changed.
+        revert_in = 0
+        if revert_needed:
+            token = secrets.token_urlsafe(12)
+            app.state.display_revert_pending = {
+                "token": token,
+                "output": body.output,
+                "prev_transform": prev_transform,
+                "prev_mode": prev_mode,
+                "deadline": time.monotonic() + DISPLAY_REVERT_SECONDS,
+            }
+            import asyncio as _asyncio
+            _asyncio.create_task(_auto_revert_display(
+                token, body.output, prev_transform, prev_mode
+            ))
+            revert_in = DISPLAY_REVERT_SECONDS
+
+        return JSONResponse({
+            "ok": True,
+            "messages": messages,
+            "revert_in_seconds": revert_in,
+        })
+
+    @app.post("/admin/display/confirm", dependencies=[Depends(require_admin)])
+    async def admin_display_confirm():
+        """Operator clicked 'Keep changes' on the auto-revert banner.
+        Clear the pending revert so the timer task is a no-op."""
+        had_pending = app.state.display_revert_pending.pop("token", None) is not None
+        # Drop the rest of the dict too.
+        app.state.display_revert_pending.clear()
+        return JSONResponse({"ok": True, "was_pending": had_pending})
+
+    @app.post("/admin/display/revert-now", dependencies=[Depends(require_admin)])
+    async def admin_display_revert_now():
+        """Operator clicked 'Revert' to undo the last display change
+        immediately. Restores the captured previous state and clears
+        the pending revert (so the auto-revert timer task no-ops)."""
+        p = dict(app.state.display_revert_pending)
+        if not p.get("token"):
+            return JSONResponse({"ok": False, "error": "nothing_to_revert"}, status_code=400)
+        app.state.display_revert_pending.clear()  # neutralize the auto-revert task
+        messages = []
+        if p.get("prev_transform"):
+            ok, msg = display.set_rotation(p["output"], p["prev_transform"])
+            messages.append(f"rotation: {msg}")
+        if p.get("prev_mode"):
+            ok, msg = display.set_mode(p["output"], p["prev_mode"])
+            messages.append(f"mode: {msg}")
         return JSONResponse({"ok": True, "messages": messages})
 
     # Kiosk control

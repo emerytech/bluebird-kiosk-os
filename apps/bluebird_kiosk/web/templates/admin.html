@@ -91,6 +91,21 @@
             <input id="disp-brightness" type="text" inputmode="numeric" placeholder="100">
           </div>
           <div style="margin-top:16px"><button id="btn-disp-apply">Apply</button></div>
+
+          <!-- Auto-revert confirmation banner. Hidden by default; shown
+               by admin.js after a rotation/mode change with a 15s
+               countdown. If operator does nothing, server reverts. -->
+          <div id="disp-revert-banner" style="display:none;margin-top:18px;padding:16px;border:2px solid var(--bb-warn,#d97706);border-radius:12px;background:rgba(217,119,6,0.12);">
+            <div style="font-weight:700;margin-bottom:6px;">Keep these display changes?</div>
+            <div style="font-size:0.95em;color:var(--bb-muted);margin-bottom:12px;">
+              Reverting in <strong id="disp-revert-countdown">15</strong> s
+              if not confirmed — so the screen never ends up unusable.
+            </div>
+            <div style="display:flex;gap:10px;">
+              <button id="btn-disp-confirm" style="flex:1">Keep changes</button>
+              <button id="btn-disp-revert" class="secondary" style="flex:1">Revert now</button>
+            </div>
+          </div>
         </div>
       </div>
 
