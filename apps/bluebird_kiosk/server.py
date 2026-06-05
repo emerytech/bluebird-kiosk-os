@@ -352,11 +352,22 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="unknown_variant")
         cache: KioskLocalCache = request.app.state.local_cache
         file_path = resolve_media_file_path(cache, int(media_id))
+        # Treat a 0-byte cache file as a miss. sync_client.py SHOULD never
+        # leave 0-byte files (we now verify size before recording the blob)
+        # but the field saw 20 such files at NEN on 2026-06-05 from a
+        # pre-fix sync run. Without this check the route would return
+        # `200 OK` with an empty body → chromium renders a broken image
+        # in the dashboard for that specific photo.
         if file_path and os.path.isfile(file_path):
-            return FileResponse(
-                path=file_path,
-                headers={"Cache-Control": "private, max-age=86400"},
-            )
+            try:
+                size_ok = os.path.getsize(file_path) > 0
+            except OSError:
+                size_ok = False
+            if size_ok:
+                return FileResponse(
+                    path=file_path,
+                    headers={"Cache-Control": "private, max-age=86400"},
+                )
         # Cache miss — fall through to the cloud. The kiosk Chromium has
         # WAN to bluebird-alerts.com working at this point (we're serving
         # cached media, but if any specific item didn't sync yet the

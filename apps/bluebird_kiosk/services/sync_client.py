@@ -170,13 +170,23 @@ class SyncClient:
             if media_id is None:
                 continue
             existing = self.cache.get_media_blob(int(media_id))
-            if existing and Path(existing["file_path"]).is_file():
-                # Already cached. Could revalidate via ETag but we trust
-                # the cursor — if the media row's updated_at changed, the
-                # manifest would have given us a new row in this same tick
-                # and we'd re-fetch below.
-                skipped += 1
-                continue
+            if existing:
+                cached_path = Path(existing["file_path"])
+                # Field-confirmed 2026-06-05: it's possible for the
+                # previous tick to have left a 0-byte file (transient
+                # cloud error, network blip mid-stream, or a server
+                # response with empty body that we wrote as-is). The
+                # original check (.is_file()) skipped those forever,
+                # leaving the kiosk with empty placeholders that
+                # render as broken images in the dashboard. Treat any
+                # zero-byte file as a cache miss so it gets re-fetched.
+                if cached_path.is_file() and cached_path.stat().st_size > 0:
+                    # Already cached. Could revalidate via ETag but we
+                    # trust the cursor — if the media row's updated_at
+                    # changed, the manifest would have given us a new
+                    # row in this same tick and we'd re-fetch below.
+                    skipped += 1
+                    continue
             ok = self._download_media(int(media_id), existing)
             if ok:
                 fetched += 1
@@ -221,6 +231,31 @@ class SyncClient:
         except OSError as exc:
             logger.warning("media %s: write failed: %s", media_id, exc)
             return False
+
+        # Verify the file actually has content. We've seen the response
+        # iter_content() loop yield zero chunks for some IDs even on a
+        # 200 status (likely transient backend/CDN issues — the cloud
+        # had the bytes on retry). Without this check, the previous
+        # version recorded a media_blobs row for a 0-byte file and
+        # subsequently skipped that media forever. Field-confirmed
+        # 2026-06-05: 20 of NEN's 274 photos were 0 bytes for this
+        # reason.
+        try:
+            actual_size = target.stat().st_size
+        except OSError:
+            actual_size = 0
+        if actual_size == 0:
+            logger.warning(
+                "media %s: downloaded 0 bytes (status=%s, content-length=%s); "
+                "leaving as cache miss to retry next tick",
+                media_id, resp.status_code, resp.headers.get("Content-Length"),
+            )
+            try:
+                target.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return False
+
         self.cache.record_media_blob(
             media_id=media_id,
             file_path=str(target),
