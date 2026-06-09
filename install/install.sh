@@ -418,6 +418,12 @@ systemctl enable bluebird-update.timer
 # from /etc/bluebird/license.token; silently skips if absent (pre-
 # firstboot). See bluebird-screenshot.timer + take-screenshot script.
 systemctl enable bluebird-screenshot.timer
+# Reliability watchdog — polls sway/chromium/local-server every 30s,
+# self-heals (restart greetd then reboot) on detected wedge. Closes
+# KI-010 (kiosk goes offline after hours of uptime, required manual
+# power-cycle). Runs as root because it has to call systemctl restart
+# and systemctl reboot. See services/watchdog.py + the unit file.
+systemctl enable bluebird-watchdog.service
 systemctl enable unattended-upgrades.service
 systemctl set-default bluebird-kiosk.target
 # bluebird-kiosk.service and bluebird-firstboot.service are NOT enabled.

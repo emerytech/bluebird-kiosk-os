@@ -1,0 +1,32 @@
+[Unit]
+Description=BlueBird Kiosk watchdog (auto-heal sway/chromium hangs)
+After=network-online.target bluebird-admin.service
+Wants=network-online.target
+PartOf=bluebird-kiosk.target
+
+[Service]
+Type=simple
+# Runs as root because it calls `systemctl restart greetd` and
+# `systemctl reboot` on detected failures. Heavy power, narrow code
+# path — only invokes systemctl with hardcoded arguments. No user
+# input ever reaches argv.
+User=root
+EnvironmentFile=-/etc/bluebird/kiosk.conf
+Environment=PYTHONPATH=/opt/bluebird-kiosk/src
+ExecStart=/usr/bin/python3 -m bluebird_kiosk.services.watchdog
+
+# Auto-restart only the daemon itself (NOT the kiosk). If the watchdog
+# process dies, systemd restarts it after 10s.
+Restart=always
+RestartSec=10
+
+# Sandbox: NO PrivateTmp (we don't use /tmp). We DO need:
+#   - access to /run for state file
+#   - access to /proc for uptime + pgrep
+#   - subprocess (systemctl, curl, pgrep)
+# Leave the default broad sandbox.
+NoNewPrivileges=no
+ProtectHome=yes
+
+[Install]
+WantedBy=bluebird-kiosk.target

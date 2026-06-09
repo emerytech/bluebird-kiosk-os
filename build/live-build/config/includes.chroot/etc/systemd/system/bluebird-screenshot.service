@@ -12,12 +12,20 @@ Type=oneshot
 ExecStart=/opt/bluebird-kiosk/bin/take-screenshot
 # Bound by timer; doesn't restart on its own.
 NoNewPrivileges=no
-# /etc/bluebird/license.token is root:root 0600 — needs root read.
-# This service path is heavily sandboxed by being timer-fired oneshot.
-ProtectSystem=strict
-ReadWritePaths=/var/lib/bluebird-kiosk
-ProtectHome=no
-PrivateTmp=yes
+#
+# Sandbox is deliberately LOOSE here. Tried PrivateTmp=yes +
+# ProtectSystem=strict initially: grim couldn't talk to the sway
+# wayland socket from inside the private namespace (sudo -u runs
+# in the same systemd namespace as the parent, so XDG_RUNTIME_DIR
+# resolves under the wrong /run mount). Field-confirmed 2026-06-09
+# — manual run from SSH works fine, but the timer-fired service
+# fails every time. Drop the sandbox bits to match the wayland
+# session.
+#
+# The script itself is simple: read kiosk.conf, call grim, curl
+# upload. No shell escape paths. The license token (the only sensitive
+# input) is in /etc/bluebird/license.token, root-owned 0600, only
+# read here.
 
 [Install]
 # No WantedBy — fired ONLY by bluebird-screenshot.timer.
