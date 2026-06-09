@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# Capture the kiosk's current sway display + POST it to the backend
+# fleet console. Fired every ~60s by bluebird-screenshot.timer.
+#
+# Auth: uses the license token from /etc/bluebird/license.token (same
+# bearer the sync service uses). If absent, exits 0 — the fleet
+# console will show "no screenshot yet" until the kiosk redeems a
+# license code via the firstboot wizard.
+#
+# Idempotent + fail-quiet: any error (no sway, no token, network down)
+# returns success so the systemd timer doesn't flap. The fleet console
+# falls back to last-known-good frame OR a placeholder. Errors are
+# journaled at WARNING for diagnosis.
+set -u
+
+CONF=/etc/bluebird/kiosk.conf
+TOKEN_FILE=/etc/bluebird/license.token
+LOG_TAG=bluebird-screenshot
+
+log_warn() { logger -t "$LOG_TAG" -p user.warning "$1"; }
+log_info() { logger -t "$LOG_TAG" -p user.info    "$1"; }
+
+# ── Preflight ────────────────────────────────────────────────────────────────
+[[ -r "$CONF" ]]       || { log_warn "missing $CONF — kiosk not configured"; exit 0; }
+# shellcheck disable=SC1090
+source "$CONF"
+BACKEND="${BLUEBIRD_BACKEND:-}"
+[[ -n "$BACKEND" ]]    || { log_warn "BLUEBIRD_BACKEND unset"; exit 0; }
+[[ -r "$TOKEN_FILE" ]] || { log_info "no license.token yet — skipping screenshot"; exit 0; }
+TOKEN="$(tr -d '[:space:]' < "$TOKEN_FILE")"
+[[ -n "$TOKEN" ]]      || { log_warn "license.token is empty"; exit 0; }
+
+# ── Find the running sway session ────────────────────────────────────────────
+# grim needs WAYLAND_DISPLAY + XDG_RUNTIME_DIR pointing at sway's socket.
+# Same pattern services/display.py uses for wlr-randr — sway runs under
+# the bluebird-kiosk user (uid varies across installs), so we probe.
+UID_RUNTIME="$(id -u bluebird-kiosk 2>/dev/null || echo 999)"
+RUNTIME_DIR="/run/user/${UID_RUNTIME}"
+WAYLAND_SOCK=""
+if [[ -d "$RUNTIME_DIR" ]]; then
+  # Pick the first wayland-* socket that isn't a lockfile.
+  for s in "$RUNTIME_DIR"/wayland-*; do
+    [[ "$s" == *.lock ]] && continue
+    [[ -S "$s" ]] && WAYLAND_SOCK="$(basename "$s")" && break
+  done
+fi
+if [[ -z "$WAYLAND_SOCK" ]]; then
+  log_info "no wayland socket at $RUNTIME_DIR — sway not up yet, skipping"
+  exit 0
+fi
+
+# ── Capture + upload ─────────────────────────────────────────────────────────
+TMP_PNG="$(mktemp --suffix=.png)"
+trap 'rm -f "$TMP_PNG"' EXIT
+
+# Run grim as the bluebird-kiosk user so it can talk to sway's wayland
+# socket. Output to a temp file then curl it — keeps the pipeline
+# simple + lets us check the file size before wasting an upload.
+if ! sudo -n -u bluebird-kiosk \
+       env XDG_RUNTIME_DIR="$RUNTIME_DIR" WAYLAND_DISPLAY="$WAYLAND_SOCK" \
+       grim -t png "$TMP_PNG" 2>/dev/null; then
+  log_warn "grim capture failed (sway socket=$RUNTIME_DIR/$WAYLAND_SOCK)"
+  exit 0
+fi
+
+SIZE="$(stat -c%s "$TMP_PNG" 2>/dev/null || echo 0)"
+if [[ "$SIZE" -lt 1024 ]]; then
+  log_warn "grim produced suspiciously small file: ${SIZE} bytes"
+  exit 0
+fi
+if [[ "$SIZE" -gt $((5 * 1024 * 1024)) ]]; then
+  log_warn "grim produced oversized file: ${SIZE} bytes (max 5MB)"
+  exit 0
+fi
+
+# POST. Use --max-time so we never block the next timer fire even on a
+# stuck network. Backend returns 200 on success, 4xx on the bad input
+# we'd catch above, or 5xx if it's down — we don't care which, just
+# don't crash the timer.
+HTTP_CODE=$(curl -sS -X POST \
+  --max-time 30 \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: image/png" \
+  --data-binary "@$TMP_PNG" \
+  -o /dev/null -w "%{http_code}" \
+  "${BACKEND%/}/api/public/kiosk/screenshot" 2>/dev/null || echo "000")
+
+if [[ "$HTTP_CODE" == "200" ]]; then
+  log_info "uploaded ${SIZE} bytes → HTTP 200"
+else
+  log_warn "upload failed HTTP $HTTP_CODE (size=${SIZE})"
+fi
+exit 0

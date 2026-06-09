@@ -169,6 +169,11 @@ APT_PACKAGES=(
   # Display utilities
   brightnessctl wlr-randr
 
+  # Screenshot capture for the fleet console (super-admin sees a live
+  # thumbnail of every kiosk). `grim` grabs the current sway output as
+  # PNG; bluebird-screenshot.timer fires every 60s.
+  grim
+
   # Input + gesture daemon dependencies
   libinput-tools python3-evdev
 
@@ -408,6 +413,11 @@ systemctl enable bluebird-kiosk-sync.service
 # if the remote version differs from /etc/bluebird/kiosk-os.version, so
 # the typical 6h tick is a cheap no-op.
 systemctl enable bluebird-update.timer
+# Screenshot capture timer — fires every 60s, uploads a PNG of the
+# current sway display to the fleet console. Pulls the license token
+# from /etc/bluebird/license.token; silently skips if absent (pre-
+# firstboot). See bluebird-screenshot.timer + take-screenshot script.
+systemctl enable bluebird-screenshot.timer
 systemctl enable unattended-upgrades.service
 systemctl set-default bluebird-kiosk.target
 # bluebird-kiosk.service and bluebird-firstboot.service are NOT enabled.

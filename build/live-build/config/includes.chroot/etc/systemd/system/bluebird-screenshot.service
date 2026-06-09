@@ -1,0 +1,23 @@
+[Unit]
+Description=BlueBird Kiosk — capture + upload screenshot for fleet console
+After=network-online.target greetd.service
+Wants=network-online.target
+PartOf=bluebird-kiosk.target
+
+[Service]
+Type=oneshot
+# Runs as root so it can `sudo -u bluebird-kiosk` to access sway's
+# wayland socket. The actual grim capture runs as bluebird-kiosk;
+# curl runs as root (no harm — it only POSTs the PNG bytes).
+ExecStart=/opt/bluebird-kiosk/bin/take-screenshot
+# Bound by timer; doesn't restart on its own.
+NoNewPrivileges=no
+# /etc/bluebird/license.token is root:root 0600 — needs root read.
+# This service path is heavily sandboxed by being timer-fired oneshot.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/bluebird-kiosk
+ProtectHome=no
+PrivateTmp=yes
+
+[Install]
+# No WantedBy — fired ONLY by bluebird-screenshot.timer.
