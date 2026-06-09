@@ -140,7 +140,6 @@ def _run_checks() -> Tuple[bool, Dict[str, bool]]:
     one check doesn't trigger action.
     """
     checks = {
-        "greetd_active":    _systemctl_is_active("greetd"),
         "sway_running":     _process_running(r"^/usr/bin/sway"),
         "chromium_running": _process_running(r"chromium.*--app=https"),
         "local_health":     _local_health_ok(),
@@ -148,11 +147,17 @@ def _run_checks() -> Tuple[bool, Dict[str, bool]]:
         # local_health will also be false, but we surface both so the
         # state file is diagnostic.
         "admin_active":     _systemctl_is_active("bluebird-admin"),
+        # greetd is Type=idle on Ubuntu — it spawns the session and
+        # exits. `systemctl is-active greetd` reports `inactive` even
+        # when the session it spawned is alive. Surface for diagnostics
+        # but DON'T gate health on it. sway_running is the real signal.
+        "greetd_active":    _systemctl_is_active("greetd"),
     }
-    # "Healthy" means every critical check passes. greetd + sway +
-    # chromium + local_health are critical. admin_active is informational
-    # (its failure implies local_health=false, which we already check).
-    critical = ("greetd_active", "sway_running", "chromium_running", "local_health")
+    # "Healthy" means every critical check passes. sway + chromium +
+    # local_health are critical (no kiosk visible without all three).
+    # admin_active is informational (its failure implies local_health=false).
+    # greetd_active is informational only — see comment above.
+    critical = ("sway_running", "chromium_running", "local_health")
     all_pass = all(checks[k] for k in critical)
     return all_pass, checks
 
