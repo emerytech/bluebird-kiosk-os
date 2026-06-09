@@ -54,11 +54,13 @@ TMP_PNG="$(mktemp --suffix=.png)"
 trap 'rm -f "$TMP_PNG"' EXIT
 
 # Run grim as the bluebird-kiosk user so it can talk to sway's wayland
-# socket. Output to a temp file then curl it — keeps the pipeline
-# simple + lets us check the file size before wasting an upload.
+# socket. `grim -t png -` writes the PNG to stdout — the parent shell
+# (root) then redirects it into the temp file. Doing it this way avoids
+# the bluebird-kiosk user trying to write into a root-owned mktemp file
+# (which fails with EACCES — field-confirmed 2026-06-09 first run).
 if ! sudo -n -u bluebird-kiosk \
        env XDG_RUNTIME_DIR="$RUNTIME_DIR" WAYLAND_DISPLAY="$WAYLAND_SOCK" \
-       grim -t png "$TMP_PNG" 2>/dev/null; then
+       grim -t png - > "$TMP_PNG" 2>/dev/null; then
   log_warn "grim capture failed (sway socket=$RUNTIME_DIR/$WAYLAND_SOCK)"
   exit 0
 fi
