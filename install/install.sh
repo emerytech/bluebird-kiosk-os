@@ -323,6 +323,19 @@ log "installing kiosk launcher scripts"
 install -d /opt/bluebird-kiosk/bin
 install -m 0755 "$LIVE_BUILD_INC"/opt/bluebird-kiosk/bin/* /opt/bluebird-kiosk/bin/
 
+log "installing managed Chromium policy"
+# Belt-and-suspenders for the --disable-features= flags in
+# launch-kiosk-chromium: the policy file applies even if the user-data
+# dir is wiped or chromium changes which CLI feature names it honors.
+# Crucially auto-allows the new Local Network Access permission API so
+# the kiosk_cache shim (which fetches http://127.0.0.1:7311 from the
+# HTTPS cloud page) doesn't trigger an "Access other apps and services
+# on this device" prompt on Chromium 132+.
+install -d /etc/chromium/policies/managed
+install -m 0644 \
+  "$LIVE_BUILD_INC/etc/chromium/policies/managed/bluebird-kiosk.json" \
+  /etc/chromium/policies/managed/
+
 log "installing polkit rules"
 install -d /etc/polkit-1/rules.d
 install -m 0644 "$LIVE_BUILD_INC/etc/polkit-1/rules.d/49-bluebird-kiosk.rules" /etc/polkit-1/rules.d/

@@ -161,7 +161,16 @@ chown -R bluebird-kiosk:bluebird-kiosk "$KIOSK_PROFILE_DIR" 2>/dev/null || true
 #   TranslateUI                                   — kill the "translate?" infobar
 #   BlockInsecurePrivateNetworkRequests           ┐ allow https page →
 #   PrivateNetworkAccessSendPreflights            │ http://127.0.0.1 fetch
-#   PrivateNetworkAccessRespectPreflightResults   ┘ (PNA opt-out)
+#   PrivateNetworkAccessRespectPreflightResults   ┘ (old PNA opt-out)
+#   LocalNetworkAccess                            ┐ Chromium 132+ replaced
+#   LocalNetworkAccessChecks                      ┘ PNA with the new
+#       "Local Network Access" permission API. Without these disabled,
+#       chromium shows an "Access other apps and services on this
+#       device" infobar/prompt instead of just letting the kiosk_cache
+#       shim fetch http://127.0.0.1:7311/legacy-wall/media/<id>/image.
+#       The fetch silently hangs until the user clicks Allow. The old
+#       PNA feature-disable above does NOT cover this. Field-confirmed
+#       on Chromium 148, 2026-06-09 at NEN.
 #   DisableLoadExtensionCommandLineSwitch         — Chromium 137+ silently
 #       ignores --load-extension unless this flag is disabled (or the
 #       user toggles Developer Mode in chrome://extensions, which we
@@ -175,7 +184,7 @@ exec /usr/bin/chromium \
   --no-first-run \
   --disable-pinch \
   --overscroll-history-navigation=0 \
-  --disable-features=TranslateUI,BlockInsecurePrivateNetworkRequests,PrivateNetworkAccessSendPreflights,PrivateNetworkAccessRespectPreflightResults,DisableLoadExtensionCommandLineSwitch \
+  --disable-features=TranslateUI,BlockInsecurePrivateNetworkRequests,PrivateNetworkAccessSendPreflights,PrivateNetworkAccessRespectPreflightResults,LocalNetworkAccessChecks,LocalNetworkAccess,DisableLoadExtensionCommandLineSwitch \
   --password-store=basic \
   --check-for-update-interval=604800 \
   --start-fullscreen \

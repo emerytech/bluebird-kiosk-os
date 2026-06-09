@@ -84,6 +84,36 @@ class RunDiagnosticBody(BaseModel):
     diag_id: int = Field(..., ge=1)
 
 
+# ── Media MIME sniffing ───────────────────────────────────────────────────────
+
+def _sniff_media_type(path: str) -> str:
+    """Detect image MIME from the file's first bytes.
+
+    The kiosk-side sync_client stores media as <id>.bin (no extension),
+    so FileResponse can't infer the type from the path and falls back to
+    application/octet-stream — which chromium refuses to render in <img>
+    tags. We sniff the magic bytes instead. Supports the formats the
+    cloud Legacy Wall actually serves; falls back to image/jpeg so
+    chromium still attempts a render rather than offering a download.
+    """
+    try:
+        with open(path, "rb") as f:
+            sig = f.read(16)
+    except OSError:
+        return "image/jpeg"
+    if len(sig) >= 3 and sig[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if len(sig) >= 8 and sig[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if len(sig) >= 6 and sig[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if len(sig) >= 12 and sig[:4] == b"RIFF" and sig[8:12] == b"WEBP":
+        return "image/webp"
+    if len(sig) >= 12 and sig[4:12] == b"ftypavif":
+        return "image/avif"
+    return "image/jpeg"
+
+
 # ── Backend slug existence check ──────────────────────────────────────────────
 
 def slug_exists_remote(backend: str, slug: str) -> bool:
@@ -317,6 +347,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="media_not_cached")
         return FileResponse(
             path=file_path,
+            media_type=_sniff_media_type(file_path),
             headers={"Cache-Control": "private, max-age=86400"},
         )
 
@@ -366,6 +397,7 @@ def create_app() -> FastAPI:
             if size_ok:
                 return FileResponse(
                     path=file_path,
+                    media_type=_sniff_media_type(file_path),
                     headers={"Cache-Control": "private, max-age=86400"},
                 )
         # Cache miss — fall through to the cloud. The kiosk Chromium has
@@ -610,6 +642,14 @@ def create_app() -> FastAPI:
         "https://www.bluebirdalerts.com",
         "https://bluebird-alerts.com",
         "https://www.bluebird-alerts.com",
+        # White-label LW domain — kiosks point chromium at this so the
+        # branded display doesn't say "bluebird-alerts.com". The Kiosk
+        # Settings cross-origin POST originates from here, so it MUST
+        # be in the allowlist or the browser silently drops the POST
+        # after the OPTIONS preflight succeeds (no Allow-Origin header
+        # → fetch hangs, no .then / .catch fires; eventually .catch
+        # produces "Kiosk admin server unreachable").
+        "https://legacy.ets3d.com",
     }
 
     def _cors_headers(request: Request) -> Dict[str, str]:
