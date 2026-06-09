@@ -39,8 +39,17 @@ unfullscreen_kiosk() {
     sock="$(ls /run/user/$(id -u)/sway-ipc.$(id -u).*.sock 2>/dev/null | head -1 || true)"
   fi
   [[ -z "$sock" ]] && return
+  # Match ANY chrome- app_id, not just URLs containing "legacy-wall".
+  # The kiosk URL has gone through several layouts:
+  #   chrome-bluebirdalerts.com__nen_legacy-wall-Default  (early)
+  #   chrome-bluebirdalerts.com__nen-Default              (when slug-only
+  #                                                       URLs landed)
+  #   chrome-legacy.ets3d.com__nen-Default                (white-label
+  #                                                       domain, current)
+  # Disabling fullscreen on the admin overlay window itself is a no-op
+  # (it isn't fullscreen), so the broader match has no side-effect.
   SWAYSOCK="$sock" swaymsg \
-    '[app_id="chrome-.*legacy-wall.*"] fullscreen disable' >/dev/null 2>&1 || true
+    '[app_id="^chrome-.*"] fullscreen disable' >/dev/null 2>&1 || true
 }
 
 # Pre-launch unfullscreen so the admin chromium's first map sees a

@@ -1,0 +1,17 @@
+{
+  "_comment": "BlueBird Kiosk OS — managed Chromium policy. Belt-and-suspenders for the --disable-features flags in launch-kiosk-chromium: the policy file applies even if the user-data-dir is wiped or chromium changes which CLI feature names it honors. Also auto-allows the Local Network Access permission for the Legacy Wall origins so the kiosk_cache shim (which fetches http://127.0.0.1:7311 from the HTTPS cloud page) doesn't trigger an 'Access other apps and services on this device' prompt.",
+
+  "InsecurePrivateNetworkRequestsAllowedForUrls": [
+    "https://legacy.ets3d.com",
+    "https://bluebirdalerts.com",
+    "https://bluebird-alerts.com"
+  ],
+  "LocalNetworkAccessAllowedForUrls": [
+    "https://legacy.ets3d.com",
+    "https://bluebirdalerts.com",
+    "https://bluebird-alerts.com"
+  ],
+  "DefaultLocalNetworkAccessSetting": 1,
+  "DefaultNotificationsSetting": 2,
+  "PromptForDownloadLocation": false
+}
