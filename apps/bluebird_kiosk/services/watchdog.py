@@ -102,11 +102,19 @@ def _systemctl_is_active(unit: str) -> bool:
         return False
 
 
-def _process_running(pattern: str) -> bool:
-    """`pgrep -f <pattern>` exit 0 means at least one match."""
+def _process_running(pattern: str, *, exact: bool = False) -> bool:
+    """`pgrep [-x|-f] <pattern>` exit 0 means at least one match.
+
+    exact=True uses `-x` (exact process-NAME match), which is what you
+    want for matching a top-level binary like `sway` regardless of its
+    argv. exact=False uses `-f` (full cmdline regex), needed when the
+    distinguishing detail is in argv (e.g. matching a specific chromium
+    by --app=URL).
+    """
+    flag = "-x" if exact else "-f"
     try:
         r = subprocess.run(
-            ["pgrep", "-f", pattern],
+            ["pgrep", flag, pattern],
             timeout=3, check=False, stdout=subprocess.DEVNULL,
         )
         return r.returncode == 0
@@ -140,7 +148,13 @@ def _run_checks() -> Tuple[bool, Dict[str, bool]]:
     one check doesn't trigger action.
     """
     checks = {
-        "sway_running":     _process_running(r"^/usr/bin/sway"),
+        # exact=True so we match the top-level `sway` process by name,
+        # not the swaybar/swaybg/swayidle children (cmdlines have `sway`
+        # as a substring but they're not the compositor).
+        "sway_running":     _process_running("sway", exact=True),
+        # Full-cmdline match because we want THE kiosk chromium (with
+        # --app=https://...), not the admin-overlay chromium or any
+        # other chromium variant.
         "chromium_running": _process_running(r"chromium.*--app=https"),
         "local_health":     _local_health_ok(),
         # bluebird-admin runs the local server; if it's not active,
