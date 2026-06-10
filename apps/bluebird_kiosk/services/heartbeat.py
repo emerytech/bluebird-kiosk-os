@@ -10,16 +10,26 @@ Each heartbeat carries:
 The resource fields let super-admin see at a glance which kiosks are
 running hot, low on disk, or short on memory — without having to SSH
 into each one or open the device admin overlay.
+
+Remote commands (Task #29): when the device has a license token, the
+heartbeat carries `Authorization: Bearer <token>` and the backend's
+response may include a `commands` list the operator queued from the
+fleet console. Each command maps to a FIXED systemctl argv below —
+there is no free-text execution path. This service runs as the
+unprivileged `bluebird-kiosk` user; the systemctl calls are authorized
+by the 49-bluebird-kiosk polkit rules (manage-units + reboot), the same
+grants the PIN-gated admin overlay relies on.
 """
 from __future__ import annotations
 
 import logging
 import os
 import socket
+import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
@@ -156,6 +166,126 @@ def _collect_resource_snapshot() -> Dict[str, Any]:
     return snapshot
 
 
+# ── Remote command executor (Task #29) ───────────────────────────────────────
+#
+# Closed mapping: command name → what actually runs. Anything not in this
+# dict is reported back as an error without executing. The backend enforces
+# the same allowlist on enqueue; this is the defense-in-depth copy.
+
+_SYSTEMCTL = "/usr/bin/systemctl"
+
+
+def _run_systemctl(argv: List[str], timeout_s: int = 30) -> Tuple[bool, str]:
+    try:
+        proc = subprocess.run(
+            [_SYSTEMCTL, *argv],
+            capture_output=True, text=True, timeout=timeout_s,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, f"systemctl {' '.join(argv)} failed: {exc}"
+    out = (proc.stdout + proc.stderr).strip()
+    if proc.returncode != 0:
+        return False, f"rc={proc.returncode}: {out[:500]}"
+    return True, out[:500] or "ok"
+
+
+def _cmd_take_screenshot() -> Tuple[bool, str]:
+    return _run_systemctl(["start", "bluebird-screenshot.service"], timeout_s=60)
+
+
+def _cmd_force_sync() -> Tuple[bool, str]:
+    return _run_systemctl(["restart", "bluebird-kiosk-sync.service"])
+
+
+def _cmd_check_update() -> Tuple[bool, str]:
+    # --no-block: the update can take minutes (apt churn); don't hold the
+    # heartbeat loop hostage. The operator watches kiosk_os_version flip
+    # on subsequent heartbeats.
+    return _run_systemctl(["start", "--no-block", "bluebird-update.service"])
+
+
+def _cmd_restart_kiosk() -> Tuple[bool, str]:
+    # Ubuntu installs run the session through greetd (the watchdog's
+    # field-proven heal path); Debian live-build images use
+    # bluebird-kiosk.service. Try greetd first, fall back.
+    ok, msg = _run_systemctl(["restart", "greetd"])
+    if ok:
+        return True, "restarted greetd: " + msg
+    ok2, msg2 = _run_systemctl(["restart", "bluebird-kiosk.service"])
+    if ok2:
+        return True, "restarted bluebird-kiosk.service: " + msg2
+    return False, f"greetd: {msg} / bluebird-kiosk.service: {msg2}"
+
+
+_COMMAND_EXECUTORS = {
+    "take_screenshot": _cmd_take_screenshot,
+    "force_sync": _cmd_force_sync,
+    "check_update": _cmd_check_update,
+    "restart_kiosk": _cmd_restart_kiosk,
+    # reboot is special-cased in _execute_commands: result is POSTed
+    # BEFORE systemctl reboot, because afterwards there is no process
+    # left to report it.
+}
+
+
+def _post_command_result(
+    backend: str, token: str, command_id: int, *, status: str, result: str,
+) -> None:
+    url = backend.rstrip("/") + "/api/public/kiosk/command-result"
+    try:
+        requests.post(
+            url,
+            json={"command_id": int(command_id), "status": status, "result": result[:8000]},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10,
+        )
+    except requests.RequestException as exc:
+        # Best-effort: the backend marks unreported 'sent' rows as
+        # timeout after 10 min, so a lost result self-heals server-side.
+        logger.warning("command %s: could not report result: %s", command_id, exc)
+
+
+def _execute_commands(commands: List[Dict[str, Any]], backend: str, token: str) -> None:
+    for entry in commands:
+        try:
+            cmd_id = int(entry.get("id", 0))
+            name = str(entry.get("command", ""))
+        except (TypeError, ValueError):
+            continue
+        if cmd_id <= 0:
+            continue
+        logger.info("command %s: executing %r", cmd_id, name)
+
+        if name == "reboot":
+            # Report first — after systemctl reboot there's nobody left
+            # to phone home. If the reboot then somehow fails, the next
+            # heartbeat (with intact uptime) is the operator's tell.
+            _post_command_result(
+                backend, token, cmd_id, status="done", result="reboot initiated",
+            )
+            ok, msg = _run_systemctl(["reboot"])
+            if not ok:
+                logger.error("command %s: reboot failed after reporting: %s", cmd_id, msg)
+            return  # no point processing further commands either way
+
+        executor = _COMMAND_EXECUTORS.get(name)
+        if executor is None:
+            _post_command_result(
+                backend, token, cmd_id,
+                status="error", result=f"unknown command: {name!r}",
+            )
+            continue
+        try:
+            ok, msg = executor()
+        except Exception as exc:  # never let one command kill the loop
+            ok, msg = False, f"executor crashed: {exc}"
+        logger.info("command %s: %s — %s", cmd_id, "done" if ok else "error", msg[:200])
+        _post_command_result(
+            backend, token, cmd_id,
+            status="done" if ok else "error", result=msg,
+        )
+
+
 def send_once() -> bool:
     cfg = config.read_config()
     backend = cfg.get("BLUEBIRD_BACKEND") or ""
@@ -174,8 +304,13 @@ def send_once() -> bool:
     }
     payload.update(_collect_resource_snapshot())
     url = backend.rstrip("/") + "/api/public/kiosk/heartbeat"
+    # Bearer when licensed — this is what authorizes remote-command
+    # delivery. Unlicensed (pre-firstboot) kiosks heartbeat slug-only
+    # exactly as before.
+    token = config.read_license_token()
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
     try:
-        resp = requests.post(url, json=payload, timeout=10)
+        resp = requests.post(url, json=payload, headers=headers, timeout=10)
     except requests.RequestException as exc:
         logger.warning("heartbeat: network error: %s", exc)
         return False
@@ -185,6 +320,15 @@ def send_once() -> bool:
     if resp.status_code >= 400:
         logger.warning("heartbeat: backend rejected status=%s body=%s", resp.status_code, resp.text[:200])
         return False
+    # Remote commands ride the response. Only possible when we sent a
+    # bearer (the backend never includes commands otherwise).
+    if token:
+        try:
+            commands = (resp.json() or {}).get("commands") or []
+        except ValueError:
+            commands = []
+        if commands:
+            _execute_commands(commands, backend, token)
     return True
 
 
