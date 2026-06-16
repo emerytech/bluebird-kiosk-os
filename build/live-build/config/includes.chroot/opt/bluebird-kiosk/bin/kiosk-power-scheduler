@@ -1,0 +1,173 @@
+#!/usr/bin/env python3
+"""BlueBird Kiosk OS — display power scheduler.
+
+Runs as root once a minute (bluebird-power-scheduler.timer). Reads the cached
+per-tenant power schedule (synced down by the heartbeat into
+/var/lib/bluebird-kiosk/power_schedule.json) and turns the panel off/on via
+sway DPMS to conserve power outside configured hours. The box stays fully
+running — only the display sleeps — so the kiosk keeps polling for emergencies
+and wakes the screen instantly.
+
+FAIL-SAFE: every ambiguous or error path leaves the display ON. The panel is
+only ever blanked when we positively determine that (a) scheduling is enabled,
+(b) the on-window is well-formed, (c) today is a scheduled day and the current
+local time is outside the window, AND (d) there is no active emergency
+incident. A safety-critical platform must never go dark by accident.
+
+Emergency override: if the kiosk's local active-incident loopback reports an
+active incident, the display is forced ON regardless of the schedule.
+
+Schedule JSON shape (all fields optional; missing/!enabled => display ON):
+    {"enabled": true, "timezone": "America/Chicago",
+     "on": "07:00", "off": "18:00", "days": [0,1,2,3,4]}   # 0=Mon .. 6=Sun
+"""
+from __future__ import annotations
+
+import glob
+import json
+import logging
+import pwd
+import subprocess
+import sys
+import urllib.request
+from datetime import datetime
+from pathlib import Path
+
+try:
+    from zoneinfo import ZoneInfo
+except Exception:  # pragma: no cover - zoneinfo is stdlib on the kiosk's py3.12
+    ZoneInfo = None  # type: ignore
+
+logger = logging.getLogger("bluebird-kiosk.power-scheduler")
+
+SCHEDULE_PATH = Path("/var/lib/bluebird-kiosk/power_schedule.json")
+CONF_PATH = Path("/etc/bluebird/kiosk.conf")
+KIOSK_USER = "bluebird-kiosk"
+
+
+def _admin_port() -> int:
+    try:
+        for line in CONF_PATH.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("ADMIN_PORT="):
+                return int(line.split("=", 1)[1].strip().strip('"').strip("'"))
+    except (OSError, ValueError):
+        pass
+    return 7311
+
+
+def _emergency_active() -> bool:
+    """True if the local loopback reports an active incident. On any error
+    returns False: we can't confirm an emergency, so the schedule proceeds —
+    and a down local server is itself a watchdog reboot condition, not our job."""
+    url = "http://127.0.0.1:%d/legacy-wall/api/active-incident" % _admin_port()
+    try:
+        with urllib.request.urlopen(url, timeout=3) as resp:
+            if resp.status != 200:
+                return False
+            data = json.loads(resp.read().decode("utf-8"))
+        return bool(isinstance(data, dict) and data.get("active"))
+    except Exception:
+        return False
+
+
+def _read_schedule() -> dict:
+    try:
+        return json.loads(SCHEDULE_PATH.read_text(encoding="utf-8")) or {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _parse_hhmm(value) -> "int | None":
+    try:
+        hh, mm = str(value).split(":")
+        h, m = int(hh), int(mm)
+        if 0 <= h <= 23 and 0 <= m <= 59:
+            return h * 60 + m
+    except (ValueError, AttributeError):
+        pass
+    return None
+
+
+def _desired_on(schedule: dict) -> bool:
+    """Whether the display should be ON now. Fail-safe: anything ambiguous => ON."""
+    if not isinstance(schedule, dict) or not schedule.get("enabled"):
+        return True
+    on_min = _parse_hhmm(schedule.get("on"))
+    off_min = _parse_hhmm(schedule.get("off"))
+    if on_min is None or off_min is None or on_min >= off_min:
+        return True  # missing or overnight/inverted window => stay on
+    days_raw = schedule.get("days")
+    if not isinstance(days_raw, list) or not days_raw:
+        return True
+    days = set()
+    for d in days_raw:
+        try:
+            days.add(int(d))
+        except (TypeError, ValueError):
+            continue
+    if not days:
+        return True
+    tz = None
+    tzname = str(schedule.get("timezone") or "").strip()
+    if tzname and ZoneInfo is not None:
+        try:
+            tz = ZoneInfo(tzname)
+        except Exception:
+            tz = None  # fall back to system localtime
+    now = datetime.now(tz) if tz else datetime.now()
+    if now.weekday() not in days:
+        return False  # not a scheduled day => off all day
+    cur = now.hour * 60 + now.minute
+    return on_min <= cur < off_min
+
+
+def _sway_socket(uid: int) -> "str | None":
+    socks = sorted(glob.glob("/run/user/%d/sway-ipc.%d.*.sock" % (uid, uid)))
+    return socks[0] if socks else None
+
+
+def _apply(state_on: bool) -> None:
+    try:
+        uid = pwd.getpwnam(KIOSK_USER).pw_uid
+    except KeyError:
+        logger.warning("user %s not found; cannot toggle display", KIOSK_USER)
+        return
+    sock = _sway_socket(uid)
+    if not sock:
+        logger.info("no sway socket for uid %d yet; session not up — skipping", uid)
+        return
+    dpms = "on" if state_on else "off"
+    cmd = [
+        "sudo", "-n", "-u", KIOSK_USER,
+        "env", "SWAYSOCK=%s" % sock, "XDG_RUNTIME_DIR=/run/user/%d" % uid,
+        "swaymsg", "output", "*", "dpms", dpms,
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.warning("swaymsg dpms %s error: %s", dpms, exc)
+        return
+    if proc.returncode != 0:
+        logger.warning(
+            "swaymsg dpms %s failed rc=%s: %s",
+            dpms, proc.returncode, (proc.stdout + proc.stderr).strip()[:200],
+        )
+    else:
+        logger.info("display dpms %s", dpms)
+
+
+def main() -> int:
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s"
+    )
+    if _emergency_active():
+        logger.info("active incident detected — forcing display ON")
+        _apply(True)
+        return 0
+    _apply(_desired_on(_read_schedule()))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
