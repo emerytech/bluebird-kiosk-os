@@ -319,6 +319,18 @@ if [[ -f /etc/sway/config ]]; then
   sed -i 's|^\(\s*output \* bg /usr/share/backgrounds/sway/.*\)|# &|' /etc/sway/config
 fi
 
+# Branded "Preparing your wall" loading wallpaper. bluebird-locked.conf points
+# swaybg at this; it's what the operator sees between the Plymouth splash
+# handing off and Chromium painting the wall (the launch-kiosk-chromium health
+# wait + cloud probe can take several seconds). Static crest-on-navy that
+# matches the animated boot splash, so the whole sequence reads as one piece.
+if [[ -f "$LIVE_BUILD_INC/opt/bluebird-kiosk/share/loading.png" ]]; then
+  log "installing kiosk loading wallpaper"
+  install -d /opt/bluebird-kiosk/share
+  install -m 0644 "$LIVE_BUILD_INC/opt/bluebird-kiosk/share/loading.png" \
+                  /opt/bluebird-kiosk/share/loading.png
+fi
+
 log "installing kiosk launcher scripts"
 install -d /opt/bluebird-kiosk/bin
 install -m 0755 "$LIVE_BUILD_INC"/opt/bluebird-kiosk/bin/* /opt/bluebird-kiosk/bin/
@@ -415,6 +427,15 @@ systemctl enable greetd.service
 # graphical.target Wants display-manager.service, and we want our DM to be
 # greetd regardless of what other DM packages might leave behind.
 ln -sf /usr/lib/systemd/system/greetd.service /etc/systemd/system/display-manager.service
+# tty1 belongs to the graphical session (greetd's [initial_session], vt 1).
+# getty.target brings up getty@tty1 by default, which races the session for the
+# VT and briefly paints a text login prompt the instant Plymouth hands off —
+# the "terminal login flash" the operator sees before the wall appears. Mask it
+# so tty1 is the session's alone, in BOTH modes (unlike tty2-6, which stay as
+# recovery consoles in debug and are only masked under --lockdown — tty1's getty
+# is never wanted because the session always owns vt1). Field-verified on the NEN
+# kiosk: getty@tty1 was in a ~50-restart loop fighting the session over tty1.
+systemctl mask getty@tty1.service 2>/dev/null || true
 systemctl enable bluebird-admin.service
 systemctl enable bluebird-gesture.service
 systemctl enable bluebird-heartbeat.service
