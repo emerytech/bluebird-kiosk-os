@@ -422,10 +422,12 @@ async function checkForUpdates() {
   btn.disabled = true;
   setUpdateState('checking…');
 
-  let notes = '', err = '';
+  let notes = '', err = '', cur = '', avail = '';
   try {
     const r = await api('/admin/system/release-notes');
     const body = await r.json().catch(() => ({}));
+    cur = body.current_version || '';
+    avail = body.available_version || '';
     if (body.ok) notes = body.notes || '';
     else err = body.error || 'could not reach the BlueBird server';
   } catch (e) {
@@ -434,6 +436,20 @@ async function checkForUpdates() {
 
   btn.disabled = false;
   setUpdateState('');
+
+  const vEl = document.getElementById('update-versions');
+  if (vEl) {
+    if (cur && avail && cur === avail) {
+      vEl.textContent = 'Already on the latest version (' + avail.slice(0, 8) + ').';
+    } else if (cur && avail) {
+      vEl.textContent = 'Installed ' + cur.slice(0, 8) + ' \u2192 updating to ' + avail.slice(0, 8);
+    } else if (avail) {
+      vEl.textContent = 'Latest version: ' + avail.slice(0, 8);
+    } else {
+      vEl.textContent = '';
+    }
+  }
+
   notesEl.textContent = notes ||
     ('Change notes are unavailable' + (err ? ' (' + err + ')' : '') +
      '.\nYou can still update — the kiosk will pull the latest version.');

@@ -816,25 +816,35 @@ def create_app() -> FastAPI:
         raises — returns {ok:false,error} so the UI can still offer to proceed."""
         cfg = config.read_config()
         backend = (cfg.get("BLUEBIRD_BACKEND") or "").rstrip("/")
+        try:
+            current = (Path("/etc/bluebird/kiosk-os.version")
+                       .read_text(encoding="utf-8").strip() or None)
+        except OSError:
+            current = None
         if not backend:
-            return JSONResponse({"ok": False, "error": "no backend configured"})
+            return JSONResponse({"ok": False, "error": "no backend configured",
+                                 "current_version": current})
         try:
             resp = requests.get(
                 backend + "/api/public/kiosk-os/release-notes",
                 timeout=6, allow_redirects=True,
             )
         except Exception as exc:  # network/DNS/TLS — stay graceful
-            return JSONResponse({"ok": False, "error": str(exc)})
+            return JSONResponse({"ok": False, "error": str(exc),
+                                 "current_version": current})
         if resp.status_code != 200:
-            return JSONResponse({"ok": False, "error": "server returned %s" % resp.status_code})
+            return JSONResponse({"ok": False, "error": "server returned %s" % resp.status_code,
+                                 "current_version": current})
         try:
             data = resp.json()
         except ValueError:
-            return JSONResponse({"ok": False, "error": "bad response"})
+            return JSONResponse({"ok": False, "error": "bad response",
+                                 "current_version": current})
         return JSONResponse({
             "ok": True,
             "notes": (data.get("notes") or ""),
-            "version": data.get("version"),
+            "current_version": current,
+            "available_version": data.get("version"),
         })
 
     @app.post("/admin/system/check-updates", dependencies=[Depends(require_admin)])

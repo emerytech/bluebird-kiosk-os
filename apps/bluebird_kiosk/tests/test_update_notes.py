@@ -42,7 +42,9 @@ def test_release_notes_proxies_cloud(kiosk_app, monkeypatch):
     r = TestClient(kiosk_app).get("/admin/system/release-notes", headers=_auth(kiosk_app))
     assert r.status_code == 200
     b = r.json()
-    assert b["ok"] is True and "a thing" in b["notes"] and b["version"] == "abc123"
+    assert b["ok"] is True and "a thing" in b["notes"]
+    assert b["available_version"] == "abc123"      # cloud "version" → available
+    assert "current_version" in b                  # None in the test env (no stamp file)
 
 
 def test_release_notes_graceful_on_network_error(kiosk_app, monkeypatch):
