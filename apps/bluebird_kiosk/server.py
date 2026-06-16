@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 
 from . import __version__, config
 from .services import display, nmcli_wrapper, pin, system
+from .services.incident_poller import IncidentPoller
 from .services.local_cache import KioskLocalCache
 from .services.renderer import collect_slideshow_media, resolve_media_file_path
 
@@ -175,6 +176,10 @@ def create_app() -> FastAPI:
     # or /admin/display/revert-now (manual revert). See DISPLAY_REVERT_SECONDS.
     app.state.display_revert_pending = {}
     app.state.local_cache = KioskLocalCache(LOCAL_CACHE_DB)
+    # Mirrors this kiosk's active-incident state from the cloud. Created here but
+    # STARTED in main() — not in create_app() — so importing the module (and the
+    # test suite) never spins up a network thread.
+    app.state.incident_poller = IncidentPoller()
     app.mount(
         "/static",
         StaticFiles(directory=str(HERE / "web" / "static")),
@@ -338,6 +343,18 @@ def create_app() -> FastAPI:
         cache: KioskLocalCache = request.app.state.local_cache
         media = collect_slideshow_media(cache)
         return JSONResponse({"media": media, "count": len(media)})
+
+    @app.get("/legacy-wall/api/active-incident")
+    async def legacy_wall_active_incident(request: Request):
+        """Latest active-incident state for THIS kiosk's tenant, cached by the
+        background IncidentPoller (which polls the cloud with the license token).
+        The cloud Legacy Wall page polls this over loopback to drive its
+        full-screen incident modal, so the page never holds the token. Returns
+        {"active": false} when not enrolled / nothing active / poller absent."""
+        poller = getattr(request.app.state, "incident_poller", None)
+        if poller is None:
+            return JSONResponse({"active": False, "is_active": False})
+        return JSONResponse(poller.current())
 
     @app.get("/legacy-wall/media/{media_id}")
     async def legacy_wall_media_blob(request: Request, media_id: int):
@@ -803,6 +820,8 @@ def main() -> int:
     args = parser.parse_args()
     import uvicorn
 
+    # Start the background cloud poll only now (real run) — never at import time.
+    app.state.incident_poller.start()
     uvicorn.run(app, host=args.bind, port=args.port, log_level="info")
     return 0
 
