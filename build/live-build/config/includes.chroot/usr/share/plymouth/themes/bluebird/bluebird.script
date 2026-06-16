@@ -1,57 +1,153 @@
-# BlueBird Kiosk OS boot splash — bluebird Plymouth theme.
+# BlueBird Kiosk OS boot/shutdown splash — premium "etched crest" theme.
 #
-# Centers the Legacy Wall badge on the Legacy Wall sidebar's dark slate
-# background (#0f172a). Stays visible from initramfs through to the point
-# greetd/sway take over the display.
+# Layers (back->front): navy radial-glow background, a soft blue bloom, the
+# cream Legacy Wall crest (blue keyed out so it floats and the glow shows
+# through the engraving), and a row of gently-pulsing loader dots.
 #
-# Plymouth Script Language reference:
-# https://www.freedesktop.org/wiki/Software/Plymouth/Scripts/
+# Animations, all on the ~50Hz refresh callback, using only portable
+# Plymouth-script features (counters + if; no Math lib, modulo, or arrays):
+#   - everything fades in over ~0.7s
+#   - the crest settles upward a few px as it fades in
+#   - the bloom "breathes" (slow triangle wave)
+#   - the dots pulse in a staggered wave
 
-# Background — solid #0f172a (RGB 15,23,42 → 0.059, 0.090, 0.165 in floats).
-Window.SetBackgroundTopColor (0.059, 0.090, 0.165);
-Window.SetBackgroundBottomColor (0.059, 0.090, 0.165);
+sw = Window.GetWidth();
+sh = Window.GetHeight();
+ox = Window.GetX();
+oy = Window.GetY();
 
-# Logo — centered, scaled to a reasonable size for the kiosk display.
-# Plymouth runs at native framebuffer resolution; we scale relative to
-# the screen width so the badge looks right on 720p mini-PCs and 4K wall
-# displays alike.
-logo.image = Image ("logo.png");
-screen_w = Window.GetWidth();
-screen_h = Window.GetHeight();
+# Fallback colour for the instant before the image maps (deep navy, not flat brand-blue).
+Window.SetBackgroundTopColor    (0.020, 0.027, 0.055);
+Window.SetBackgroundBottomColor (0.012, 0.016, 0.035);
 
-# Target: badge takes ~28% of the screen width, preserving aspect.
-target_w = screen_w * 0.28;
-scale = target_w / logo.image.GetWidth();
-logo.scaled = logo.image.Scale (logo.image.GetWidth() * scale,
-                                logo.image.GetHeight() * scale);
-logo.sprite = Sprite (logo.scaled);
-logo.sprite.SetX (Window.GetX() + (screen_w - logo.scaled.GetWidth()) / 2);
-logo.sprite.SetY (Window.GetY() + (screen_h - logo.scaled.GetHeight()) / 2);
-logo.sprite.SetZ (10);
+# -- Background: full-screen navy radial glow --
+bg.image  = Image ("background.png");
+bg.scaled = bg.image.Scale (sw, sh);
+bg.sprite = Sprite (bg.scaled);
+bg.sprite.SetX (ox);
+bg.sprite.SetY (oy);
+bg.sprite.SetZ (0);
+bg.sprite.SetOpacity (0);
 
-# Gentle fade-in over the first ~0.6s. Plymouth calls refresh at ~50Hz.
-fade_step = 0;
-fade_total = 30;   # 30 frames @ 50Hz ≈ 0.6s
-logo.sprite.SetOpacity (0);
-fun refresh_callback () {
-    if (fade_step < fade_total) {
-        fade_step++;
-        logo.sprite.SetOpacity (fade_step / fade_total);
-    }
+# -- Crest: cream emblem, ~30% screen width, centred a touch high --
+em.image = Image ("emblem.png");
+em_w  = sw * 0.30;
+em_sc = em_w / em.image.GetWidth ();
+em.scaled = em.image.Scale (em.image.GetWidth () * em_sc, em.image.GetHeight () * em_sc);
+em.sprite = Sprite (em.scaled);
+em_x = ox + (sw - em.scaled.GetWidth ()) / 2;
+em_base_y = oy + (sh - em.scaled.GetHeight ()) / 2 - sh * 0.04;
+em.sprite.SetX (em_x);
+em.sprite.SetY (em_base_y);
+em.sprite.SetZ (10);
+em.sprite.SetOpacity (0);
+
+# -- Bloom: soft blue glow behind the crest, breathing --
+gl.image = Image ("glow.png");
+gl_w  = em.scaled.GetWidth () * 1.55;
+gl_sc = gl_w / gl.image.GetWidth ();
+gl.scaled = gl.image.Scale (gl.image.GetWidth () * gl_sc, gl.image.GetHeight () * gl_sc);
+gl.sprite = Sprite (gl.scaled);
+em_cx = em_x + em.scaled.GetWidth () / 2;
+em_cy = em_base_y + em.scaled.GetHeight () / 2;
+gl.sprite.SetX (em_cx - gl.scaled.GetWidth () / 2);
+gl.sprite.SetY (em_cy - gl.scaled.GetHeight () / 2);
+gl.sprite.SetZ (5);
+gl.sprite.SetOpacity (0);
+
+# -- Loader dots: five, centred low, staggered pulse --
+dot.image = Image ("dot.png");
+dot_d  = sw * 0.010;
+dot_sc = dot_d / dot.image.GetWidth ();
+dot.scaled = dot.image.Scale (dot.image.GetWidth () * dot_sc, dot.image.GetHeight () * dot_sc);
+dot_gap = dot_d * 2.0;
+dots_total = dot_gap * 4;
+dots_left = ox + (sw - dots_total) / 2 - dot.scaled.GetWidth () / 2;
+dots_y = oy + sh * 0.80;
+
+d0.sprite = Sprite (dot.scaled); d0.sprite.SetX (dots_left + dot_gap*0); d0.sprite.SetY (dots_y); d0.sprite.SetZ (8); d0.sprite.SetOpacity (0);
+d1.sprite = Sprite (dot.scaled); d1.sprite.SetX (dots_left + dot_gap*1); d1.sprite.SetY (dots_y); d1.sprite.SetZ (8); d1.sprite.SetOpacity (0);
+d2.sprite = Sprite (dot.scaled); d2.sprite.SetX (dots_left + dot_gap*2); d2.sprite.SetY (dots_y); d2.sprite.SetZ (8); d2.sprite.SetOpacity (0);
+d3.sprite = Sprite (dot.scaled); d3.sprite.SetX (dots_left + dot_gap*3); d3.sprite.SetY (dots_y); d3.sprite.SetZ (8); d3.sprite.SetOpacity (0);
+d4.sprite = Sprite (dot.scaled); d4.sprite.SetX (dots_left + dot_gap*4); d4.sprite.SetY (dots_y); d4.sprite.SetZ (8); d4.sprite.SetOpacity (0);
+
+# -- Animation state --
+tick = 0;
+fade_total = 35;
+settle_px  = sh * 0.022;
+
+glow_phase  = 0;
+glow_period = 170;
+
+dot_period  = 90;
+dot_stagger = 16;
+d0_phase = 0;
+d1_phase = dot_stagger * 1;
+d2_phase = dot_stagger * 2;
+d3_phase = dot_stagger * 3;
+d4_phase = dot_stagger * 4;
+
+fun tri (phase, period) {
+    half = period / 2;
+    if (phase < half) { return phase / half; }
+    return (period - phase) / half;
 }
-Plymouth.SetRefreshFunction (refresh_callback);
 
-# Stay quiet on boot messages (the kiosk runs single-purpose; users don't
-# need to see kernel chatter). Optional: subtle bottom-of-screen status.
-status = "boot";
-fun display_normal_callback () { status = "boot"; }
-fun display_password_callback (prompt, bullets) { status = "password"; }
-fun display_question_callback (prompt, entry)   { status = "question"; }
-fun display_message_callback (text)             { }
+fun refresh () {
+    tick++;
+    f = tick / fade_total;
+    if (f > 1) { f = 1; }
+
+    bg.sprite.SetOpacity (f);
+    em.sprite.SetOpacity (f);
+    em.sprite.SetY (em_base_y + settle_px * (1 - f));
+
+    glow_phase++;
+    if (glow_phase >= glow_period) { glow_phase = 0; }
+    gb = 0.55 + 0.45 * tri (glow_phase, glow_period);
+    gl.sprite.SetOpacity (gb * f);
+
+    d0_phase++; if (d0_phase >= dot_period) { d0_phase = 0; }
+    d1_phase++; if (d1_phase >= dot_period) { d1_phase = 0; }
+    d2_phase++; if (d2_phase >= dot_period) { d2_phase = 0; }
+    d3_phase++; if (d3_phase >= dot_period) { d3_phase = 0; }
+    d4_phase++; if (d4_phase >= dot_period) { d4_phase = 0; }
+    db = 0.20;
+    da = 0.80;
+    d0.sprite.SetOpacity ((db + da * tri (d0_phase, dot_period)) * f);
+    d1.sprite.SetOpacity ((db + da * tri (d1_phase, dot_period)) * f);
+    d2.sprite.SetOpacity ((db + da * tri (d2_phase, dot_period)) * f);
+    d3.sprite.SetOpacity ((db + da * tri (d3_phase, dot_period)) * f);
+    d4.sprite.SetOpacity ((db + da * tri (d4_phase, dot_period)) * f);
+}
+Plymouth.SetRefreshFunction (refresh);
+
+# -- Boot / prompt / shutdown callbacks --
+prompt.sprite = Sprite ();
+prompt.sprite.SetZ (20);
+
+fun display_normal_callback () {
+    prompt.sprite.SetOpacity (0);
+}
+fun display_password_callback (prompt_text, bullets) {
+    img = Image.Text (prompt_text + "  " + bullets, 0.88, 0.92, 1.0);
+    prompt.sprite.SetImage (img);
+    prompt.sprite.SetX (ox + (sw - img.GetWidth ()) / 2);
+    prompt.sprite.SetY (oy + sh * 0.88);
+    prompt.sprite.SetOpacity (1);
+}
+fun display_question_callback (prompt_text, entry) {
+    img = Image.Text (prompt_text + "  " + entry, 0.88, 0.92, 1.0);
+    prompt.sprite.SetImage (img);
+    prompt.sprite.SetX (ox + (sw - img.GetWidth ()) / 2);
+    prompt.sprite.SetY (oy + sh * 0.88);
+    prompt.sprite.SetOpacity (1);
+}
+fun display_message_callback (text) { }
 fun quit_callback () { }
 
-Plymouth.SetDisplayNormalFunction       (display_normal_callback);
-Plymouth.SetDisplayPasswordFunction     (display_password_callback);
-Plymouth.SetDisplayQuestionFunction     (display_question_callback);
-Plymouth.SetMessageFunction             (display_message_callback);
-Plymouth.SetQuitFunction                (quit_callback);
+Plymouth.SetDisplayNormalFunction   (display_normal_callback);
+Plymouth.SetDisplayPasswordFunction (display_password_callback);
+Plymouth.SetDisplayQuestionFunction (display_question_callback);
+Plymouth.SetMessageFunction         (display_message_callback);
+Plymouth.SetQuitFunction            (quit_callback);
