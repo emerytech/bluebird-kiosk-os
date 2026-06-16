@@ -452,6 +452,12 @@ systemctl enable bluebird-update.timer
 # from /etc/bluebird/license.token; silently skips if absent (pre-
 # firstboot). See bluebird-screenshot.timer + take-screenshot script.
 systemctl enable bluebird-screenshot.timer
+# Display power scheduler — fires every 60s, applies the per-tenant on/off
+# schedule (synced down by the heartbeat) via sway DPMS to conserve power
+# outside configured hours. Fail-safe: leaves the display ON on any error and
+# forces it ON during an active incident. See kiosk-power-scheduler + the
+# bluebird-power-scheduler.{service,timer} units.
+systemctl enable bluebird-power-scheduler.timer
 # Reliability watchdog — polls sway/chromium/local-server every 30s,
 # self-heals (restart greetd then reboot) on detected wedge. Closes
 # KI-010 (kiosk goes offline after hours of uptime, required manual

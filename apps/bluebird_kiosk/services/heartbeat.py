@@ -22,6 +22,7 @@ grants the PIN-gated admin overlay relies on.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import socket
@@ -286,6 +287,34 @@ def _execute_commands(commands: List[Dict[str, Any]], backend: str, token: str) 
         )
 
 
+# ── Display power schedule cache ──────────────────────────────────────────────
+#
+# The backend may include a per-tenant `power_schedule` in the heartbeat
+# response. We persist it where the root power-scheduler timer
+# (kiosk-power-scheduler) can read it. Written to /var/lib/bluebird-kiosk —
+# owned by this (bluebird-kiosk) user — so no privileged write is needed.
+
+_POWER_SCHEDULE_PATH = Path("/var/lib/bluebird-kiosk/power_schedule.json")
+
+
+def _cache_power_schedule(schedule: Any) -> None:
+    """Atomically persist the display power schedule. A null/omitted schedule
+    is stored as {} (disabled), so disabling it in the CMS clears the local
+    copy on the next heartbeat. Best-effort: a write failure is logged and
+    never breaks the heartbeat."""
+    if schedule is None:
+        schedule = {}
+    if not isinstance(schedule, dict):
+        return
+    try:
+        _POWER_SCHEDULE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _POWER_SCHEDULE_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(schedule), encoding="utf-8")
+        tmp.replace(_POWER_SCHEDULE_PATH)
+    except OSError as exc:
+        logger.warning("heartbeat: could not cache power schedule: %s", exc)
+
+
 def send_once() -> bool:
     cfg = config.read_config()
     backend = cfg.get("BLUEBIRD_BACKEND") or ""
@@ -320,13 +349,20 @@ def send_once() -> bool:
     if resp.status_code >= 400:
         logger.warning("heartbeat: backend rejected status=%s body=%s", resp.status_code, resp.text[:200])
         return False
+    # Parse the response body once. It may carry a per-tenant display power
+    # schedule (any heartbeat) and remote commands (bearer heartbeats only).
+    try:
+        data = resp.json() or {}
+    except ValueError:
+        data = {}
+    # Only (re)write the cache when the backend actually sent the key, so an
+    # older backend that omits it never clobbers a good local schedule.
+    if isinstance(data, dict) and "power_schedule" in data:
+        _cache_power_schedule(data.get("power_schedule"))
     # Remote commands ride the response. Only possible when we sent a
     # bearer (the backend never includes commands otherwise).
     if token:
-        try:
-            commands = (resp.json() or {}).get("commands") or []
-        except ValueError:
-            commands = []
+        commands = data.get("commands") or [] if isinstance(data, dict) else []
         if commands:
             _execute_commands(commands, backend, token)
     return True

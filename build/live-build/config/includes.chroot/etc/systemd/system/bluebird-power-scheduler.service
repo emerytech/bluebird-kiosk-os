@@ -1,0 +1,14 @@
+# Applies the per-tenant display power schedule (DPMS off/on) to conserve power
+# outside configured hours. Runs as root so it can `sudo -u bluebird-kiosk` into
+# the sway session to issue swaymsg, mirroring bluebird-screenshot. Oneshot:
+# fired every minute by bluebird-power-scheduler.timer. Fail-safe — the script
+# leaves the display ON on any error and forces it ON during an active incident.
+[Unit]
+Description=BlueBird Kiosk display power scheduler (DPMS off/on by schedule)
+After=bluebird-admin.service
+Wants=bluebird-admin.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/bluebird-kiosk/bin/kiosk-power-scheduler
+Nice=10

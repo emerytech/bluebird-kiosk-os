@@ -1,0 +1,14 @@
+# Fire the display power scheduler every minute. A 1-minute granularity means a
+# scheduled on/off transition lands within ~60s of the configured time, which is
+# plenty for a wall display. OnBootSec is delayed so the sway session + local
+# admin server are up before the first evaluation.
+[Unit]
+Description=Run the BlueBird kiosk display power scheduler every minute
+
+[Timer]
+OnBootSec=90
+OnUnitActiveSec=60
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target
