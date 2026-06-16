@@ -157,6 +157,22 @@ cat > "$KIOSK_PROFILE_DIR/Default/Preferences" <<'PREF'
 PREF
 chown -R bluebird-kiosk:bluebird-kiosk "$KIOSK_PROFILE_DIR" 2>/dev/null || true
 
+# Minimum loading-screen display time. The branded "Preparing your wall"
+# swaybg wallpaper is visible from sway start until Chromium paints over it at
+# the exec below. On a fast kiosk (wall already reachable, warm cache) all the
+# work above can finish in ~1s, so Chromium would cover the wallpaper almost
+# instantly and the loading screen flashes by — looking like a glitch. Hold
+# until at least MIN_LOADING_SECONDS have elapsed since this launcher started
+# (≈ since the wallpaper appeared, both fire at sway startup) so the handoff
+# always reads as deliberate. $SECONDS is bash's integer elapsed-runtime
+# counter; the wait only ever ADDS time on a fast boot, never delays a slow
+# one (a slow boot already exceeded the floor). Override via
+# KIOSK_MIN_LOADING_SECONDS in /etc/bluebird/kiosk.conf; 0 disables it.
+MIN_LOADING_SECONDS="${KIOSK_MIN_LOADING_SECONDS:-5}"
+if [[ "$MIN_LOADING_SECONDS" -gt 0 && "$SECONDS" -lt "$MIN_LOADING_SECONDS" ]]; then
+  sleep "$(( MIN_LOADING_SECONDS - SECONDS ))"
+fi
+
 # --disable-features list:
 #   TranslateUI                                   — kill the "translate?" infobar
 #   BlockInsecurePrivateNetworkRequests           ┐ allow https page →
