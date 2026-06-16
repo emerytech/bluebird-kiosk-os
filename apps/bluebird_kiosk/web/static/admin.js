@@ -415,7 +415,36 @@ function setUpdateState(label) {
 }
 
 async function checkForUpdates() {
-  if (_updatePollTimer) return;  // already running
+  if (_updatePollTimer) return;  // an update is already running
+  const btn = document.getElementById('btn-sys-update');
+  const confirmEl = document.getElementById('update-confirm');
+  const notesEl = document.getElementById('update-notes');
+  btn.disabled = true;
+  setUpdateState('checking…');
+
+  let notes = '', err = '';
+  try {
+    const r = await api('/admin/system/release-notes');
+    const body = await r.json().catch(() => ({}));
+    if (body.ok) notes = body.notes || '';
+    else err = body.error || 'could not reach the BlueBird server';
+  } catch (e) {
+    err = String(e);
+  }
+
+  btn.disabled = false;
+  setUpdateState('');
+  notesEl.textContent = notes ||
+    ('Change notes are unavailable' + (err ? ' (' + err + ')' : '') +
+     '.\nYou can still update — the kiosk will pull the latest version.');
+  confirmEl.style.display = 'block';
+}
+
+// Actually applies the update — only reached after the operator reviews the
+// change notes and presses "Update now".
+async function startUpdateNow() {
+  if (_updatePollTimer) return;
+  document.getElementById('update-confirm').style.display = 'none';
   const btn = document.getElementById('btn-sys-update');
   const out = document.getElementById('update-output');
   btn.disabled = true;
@@ -499,6 +528,10 @@ document.getElementById('btn-sys-logs').addEventListener('click', loadLogs);
 document.getElementById('btn-sys-pin').addEventListener('click', changePin);
 document.getElementById('btn-sys-reset').addEventListener('click', factoryReset);
 document.getElementById('btn-sys-update').addEventListener('click', checkForUpdates);
+document.getElementById('btn-update-now').addEventListener('click', startUpdateNow);
+document.getElementById('btn-update-cancel').addEventListener('click', function () {
+  document.getElementById('update-confirm').style.display = 'none';
+});
 
 // ── Console tab (allow-listed diagnostic runner) ────────────────────────────
 
