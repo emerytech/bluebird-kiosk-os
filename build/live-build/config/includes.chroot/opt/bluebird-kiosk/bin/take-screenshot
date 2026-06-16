@@ -30,6 +30,17 @@ BACKEND="${BLUEBIRD_BACKEND:-}"
 TOKEN="$(tr -d '[:space:]' < "$TOKEN_FILE")"
 [[ -n "$TOKEN" ]]      || { log_warn "license.token is empty"; exit 0; }
 
+# ── Skip while the panel is scheduled-off ────────────────────────────────────
+# Uploading a black DPMS-off frame would make the fleet console look like the
+# kiosk is wedged. The power scheduler records its last decision here; an
+# incident override keeps the display on (scheduled_off=false) so its screen
+# IS still captured.
+STATE_FILE=/var/lib/bluebird-kiosk/power_state.json
+if [[ -r "$STATE_FILE" ]] && /usr/bin/python3 -c "import json,sys; sys.exit(0 if json.load(open('$STATE_FILE')).get('scheduled_off') else 1)" 2>/dev/null; then
+  log_info "display scheduled off — skipping screenshot"
+  exit 0
+fi
+
 # ── Find the running sway session ────────────────────────────────────────────
 # grim needs WAYLAND_DISPLAY + XDG_RUNTIME_DIR pointing at sway's socket.
 # Same pattern services/display.py uses for wlr-randr — sway runs under

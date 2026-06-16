@@ -41,8 +41,29 @@ except Exception:  # pragma: no cover - zoneinfo is stdlib on the kiosk's py3.12
 logger = logging.getLogger("bluebird-kiosk.power-scheduler")
 
 SCHEDULE_PATH = Path("/var/lib/bluebird-kiosk/power_schedule.json")
+# Last applied display state — read by take-screenshot (skip black frames while
+# the panel is scheduled-off) and by the heartbeat (report "scheduled off" to
+# the fleet console so it isn't mistaken for a wedged/black kiosk).
+STATE_PATH = Path("/var/lib/bluebird-kiosk/power_state.json")
 CONF_PATH = Path("/etc/bluebird/kiosk.conf")
 KIOSK_USER = "bluebird-kiosk"
+
+
+def _write_state(display_on: bool, reason: str) -> None:
+    """Persist the last decision. scheduled_off is true only when the schedule
+    blanked the panel — an incident override (display_on while off-hours) is
+    NOT scheduled_off, so its screen is still captured + the fleet shows it."""
+    try:
+        STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = STATE_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps({
+            "display_on": bool(display_on),
+            "scheduled_off": bool(not display_on and reason == "schedule"),
+            "reason": reason,
+        }), encoding="utf-8")
+        tmp.replace(STATE_PATH)
+    except OSError as exc:
+        logger.warning("could not write power state: %s", exc)
 
 
 def _admin_port() -> int:
@@ -164,8 +185,13 @@ def main() -> int:
     if _emergency_active():
         logger.info("active incident detected — forcing display ON")
         _apply(True)
+        _write_state(True, "incident")
         return 0
-    _apply(_desired_on(_read_schedule()))
+    schedule = _read_schedule()
+    desired = _desired_on(schedule)
+    _apply(desired)
+    reason = "schedule" if (isinstance(schedule, dict) and schedule.get("enabled")) else "no_schedule"
+    _write_state(desired, reason)
     return 0
 
 
