@@ -508,10 +508,17 @@ THEME_SRC="$LIVE_BUILD_INC/usr/share/plymouth/themes/bluebird"
 if [[ -d "$THEME_SRC" ]]; then
   log "installing Plymouth theme files (bluebird)"
   install -d /usr/share/plymouth/themes/bluebird
+  # Copy the whole theme dir so all assets ride along (the premium theme
+  # uses background/glow/dot/emblem PNGs, not a single logo). Remove any
+  # stale asset from an older theme version first so it can't linger.
+  rm -f /usr/share/plymouth/themes/bluebird/logo.png
   install -m 0644 \
     "$THEME_SRC/bluebird.plymouth" \
     "$THEME_SRC/bluebird.script" \
-    "$THEME_SRC/logo.png" \
+    "$THEME_SRC/background.png" \
+    "$THEME_SRC/glow.png" \
+    "$THEME_SRC/dot.png" \
+    "$THEME_SRC/emblem.png" \
     /usr/share/plymouth/themes/bluebird/
 fi
 
