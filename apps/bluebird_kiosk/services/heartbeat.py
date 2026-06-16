@@ -315,6 +315,20 @@ def _cache_power_schedule(schedule: Any) -> None:
         logger.warning("heartbeat: could not cache power schedule: %s", exc)
 
 
+_POWER_STATE_PATH = Path("/var/lib/bluebird-kiosk/power_state.json")
+
+
+def _read_display_scheduled_off() -> bool:
+    """True when the power scheduler has the panel blanked by schedule (not by
+    an incident — incidents keep the display on). Reported so the fleet console
+    shows 'scheduled off' instead of flagging a dark kiosk. Best-effort -> False."""
+    try:
+        data = json.loads(_POWER_STATE_PATH.read_text(encoding="utf-8"))
+        return bool(isinstance(data, dict) and data.get("scheduled_off"))
+    except (OSError, ValueError):
+        return False
+
+
 def send_once() -> bool:
     cfg = config.read_config()
     backend = cfg.get("BLUEBIRD_BACKEND") or ""
@@ -330,6 +344,7 @@ def send_once() -> bool:
         "kiosk_version": __version__,
         "hostname": socket.gethostname(),
         "uptime_sec": _read_uptime(),
+        "display_scheduled_off": _read_display_scheduled_off(),
     }
     payload.update(_collect_resource_snapshot())
     url = backend.rstrip("/") + "/api/public/kiosk/heartbeat"
