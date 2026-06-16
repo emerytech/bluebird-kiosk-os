@@ -199,6 +199,13 @@ APT_PACKAGES=(
   # since we're Wayland-only.
   plymouth plymouth-themes
 
+  # Fonts — minimal Ubuntu ships NO color-emoji font, so Chromium renders the
+  # emoji in the Legacy Wall UI (🤝 Share, 🎥 View Aerial, 📆 Filter Year,
+  # 🔍 search, etc.) as blank/tofu while plain symbols (▶ ⏸) still work. Noto
+  # Color Emoji is the standard fix; fontconfig auto-registers it as the emoji
+  # fallback so it works in Chromium with no extra config.
+  fonts-noto-color-emoji
+
   # Maintenance
   sudo systemd systemd-timesyncd unattended-upgrades ca-certificates
 
