@@ -809,6 +809,34 @@ def create_app() -> FastAPI:
     async def admin_system_logs(lines: int = 200):
         return PlainTextResponse(system.recent_logs(lines))
 
+    @app.get("/admin/system/release-notes", dependencies=[Depends(require_admin)])
+    async def admin_release_notes():
+        """Fetch the kiosk-os change notes from the BlueBird server so the
+        operator can review what an update will install before confirming. Never
+        raises — returns {ok:false,error} so the UI can still offer to proceed."""
+        cfg = config.read_config()
+        backend = (cfg.get("BLUEBIRD_BACKEND") or "").rstrip("/")
+        if not backend:
+            return JSONResponse({"ok": False, "error": "no backend configured"})
+        try:
+            resp = requests.get(
+                backend + "/api/public/kiosk-os/release-notes",
+                timeout=6, allow_redirects=True,
+            )
+        except Exception as exc:  # network/DNS/TLS — stay graceful
+            return JSONResponse({"ok": False, "error": str(exc)})
+        if resp.status_code != 200:
+            return JSONResponse({"ok": False, "error": "server returned %s" % resp.status_code})
+        try:
+            data = resp.json()
+        except ValueError:
+            return JSONResponse({"ok": False, "error": "bad response"})
+        return JSONResponse({
+            "ok": True,
+            "notes": (data.get("notes") or ""),
+            "version": data.get("version"),
+        })
+
     @app.post("/admin/system/check-updates", dependencies=[Depends(require_admin)])
     async def admin_check_updates():
         """Kick off the oneshot bluebird-update.service. Returns immediately;

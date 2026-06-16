@@ -165,8 +165,16 @@
             <button id="btn-sys-reset" class="danger">Factory reset</button>
           </div>
           <div style="margin-top:16px">
-            <button id="btn-sys-update" class="secondary">Check for updates</button>
+            <button id="btn-sys-update" class="secondary">Update kiosk</button>
             <span id="update-state" style="margin-left:10px;color:var(--bb-muted);font-size:0.9em"></span>
+            <div id="update-confirm" style="display:none;margin-top:12px">
+              <div style="font-weight:600;margin-bottom:6px">What&rsquo;s new in this update</div>
+              <pre id="update-notes" style="white-space:pre-wrap;background:var(--bb-bg);padding:12px;border-radius:8px;max-height:260px;overflow:auto;margin:0"></pre>
+              <div class="row" style="margin-top:8px">
+                <button id="btn-update-now">Update now</button>
+                <button id="btn-update-cancel" class="secondary">Cancel</button>
+              </div>
+            </div>
             <pre id="update-output" style="display:none;white-space:pre-wrap;background:var(--bb-bg);padding:12px;border-radius:8px;max-height:300px;overflow:auto;margin-top:8px"></pre>
           </div>
 
