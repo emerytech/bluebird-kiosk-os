@@ -180,6 +180,17 @@ def create_app() -> FastAPI:
     # STARTED in main() — not in create_app() — so importing the module (and the
     # test suite) never spins up a network thread.
     app.state.incident_poller = IncidentPoller()
+    # Freshness heartbeat: updated on every page-driven request (kiosk viewer,
+    # local fallback, or admin overlay). The watchdog reads its age via /_health
+    # to detect a wedged display (e.g. stuck on a Cloudflare error page, which
+    # drives zero local requests) and restart the session.
+    app.state.last_page_activity = time.monotonic()
+
+    @app.middleware("http")
+    async def _track_page_activity(request: Request, call_next):
+        if request.url.path != "/_health":
+            request.app.state.last_page_activity = time.monotonic()
+        return await call_next(request)
     app.mount(
         "/static",
         StaticFiles(directory=str(HERE / "web" / "static")),
@@ -189,8 +200,10 @@ def create_app() -> FastAPI:
     # ── Common ───────────────────────────────────────────────────────────────
 
     @app.get("/_health")
-    async def health() -> PlainTextResponse:
-        return PlainTextResponse("ok")
+    async def health(request: Request) -> JSONResponse:
+        last = getattr(request.app.state, "last_page_activity", None)
+        idle = int(time.monotonic() - last) if last is not None else None
+        return JSONResponse({"status": "ok", "page_idle_sec": idle})
 
     @app.get("/")
     async def root(request: Request):

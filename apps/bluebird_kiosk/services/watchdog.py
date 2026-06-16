@@ -73,6 +73,7 @@ FAIL_THRESHOLD        = _env_int("WATCHDOG_FAIL_THRESHOLD", 3)
 RECOVERING_PROBES     = _env_int("WATCHDOG_RECOVERING_PROBES", 4)
 REBOOT_COOLDOWN_SEC   = _env_int("WATCHDOG_REBOOT_COOLDOWN_SEC", 1800)
 BOOT_GRACE_SEC        = _env_int("WATCHDOG_BOOT_GRACE_SEC", 120)
+PAGE_STALE_SEC        = _env_int("WATCHDOG_PAGE_STALE_SEC", 120)
 DRY_RUN               = bool(_env_int("WATCHDOG_DRY_RUN", 0))
 
 STATE_PATH = Path("/run/bluebird-kiosk/watchdog.json")
@@ -122,20 +123,28 @@ def _process_running(pattern: str, *, exact: bool = False) -> bool:
         return False
 
 
-def _local_health_ok() -> bool:
-    """Curl the local admin server's /_health within 2 s. We use curl
-    instead of `requests` so we don't carry a Python HTTP dependency
-    into watchdog's hot path — it has to keep working even if the
-    Python venv is partially broken."""
+def _local_health() -> Tuple[bool, Optional[int]]:
+    """Curl the local admin server's /_health (JSON) within 2 s and return
+    (health_ok, page_idle_sec). page_idle_sec is the seconds since the displayed
+    page last hit the local server; None if unknown/unparseable (treated as fresh
+    so we never restart on a parse hiccup). curl (not `requests`) keeps the
+    watchdog hot path dependency-free even if the venv is partially broken."""
     try:
         r = subprocess.run(
-            ["curl", "-fsS", "--max-time", "2", "-o", "/dev/null",
-             LOCAL_HEALTH_URL],
-            timeout=3, check=False,
+            ["curl", "-fsS", "--max-time", "2", LOCAL_HEALTH_URL],
+            timeout=3, check=False, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         )
-        return r.returncode == 0
     except (FileNotFoundError, subprocess.TimeoutExpired):
-        return False
+        return False, None
+    if r.returncode != 0:
+        return False, None
+    try:
+        data = json.loads((r.stdout or b"").decode("utf-8") or "{}")
+        raw = data.get("page_idle_sec")
+        idle = int(raw) if raw is not None else None
+    except (ValueError, TypeError, AttributeError, UnicodeDecodeError):
+        idle = None
+    return True, idle
 
 
 def _run_checks() -> Tuple[bool, Dict[str, bool]]:
@@ -147,6 +156,12 @@ def _run_checks() -> Tuple[bool, Dict[str, bool]]:
     are passing OR consistently failing — a single transient flake on
     one check doesn't trigger action.
     """
+    health_ok, page_idle = _local_health()
+    # page_fresh fails only when the local server is UP but the displayed page has
+    # stopped driving it for PAGE_STALE_SEC — the signature of a wedged render
+    # (e.g. a Cloudflare error page). Unknown idle → fresh (fail-safe). When the
+    # local server itself is down, local_health already fails, so don't double-count.
+    page_fresh = (page_idle is None) or (page_idle < PAGE_STALE_SEC)
     checks = {
         # exact=True so we match the top-level `sway` process by name,
         # not the swaybar/swaybg/swayidle children (cmdlines have `sway`
@@ -156,7 +171,9 @@ def _run_checks() -> Tuple[bool, Dict[str, bool]]:
         # --app=https://...), not the admin-overlay chromium or any
         # other chromium variant.
         "chromium_running": _process_running(r"chromium.*--app=https"),
-        "local_health":     _local_health_ok(),
+        "local_health":     health_ok,
+        # Wedged-page detector: see page_fresh computed above.
+        "page_fresh":       page_fresh,
         # bluebird-admin runs the local server; if it's not active,
         # local_health will also be false, but we surface both so the
         # state file is diagnostic.
@@ -171,7 +188,7 @@ def _run_checks() -> Tuple[bool, Dict[str, bool]]:
     # local_health are critical (no kiosk visible without all three).
     # admin_active is informational (its failure implies local_health=false).
     # greetd_active is informational only — see comment above.
-    critical = ("sway_running", "chromium_running", "local_health")
+    critical = ("sway_running", "chromium_running", "local_health", "page_fresh")
     all_pass = all(checks[k] for k in critical)
     return all_pass, checks
 
