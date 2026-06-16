@@ -111,3 +111,20 @@ def test_cache_survives_reopen(tmp_path):
     c2 = KioskLocalCache(path)
     assert c2.get_cursor() == "2026-05-14T05:00:00+00:00"
     assert c2.row_count("lw_albums") == 1
+
+
+def test_video_blob_track(cache, tmp_path):
+    p = tmp_path / "webm.bin"
+    p.write_bytes(b"video")
+    cache.record_video_blob("webm", str(p), '"e1"', "t0")
+    blob = cache.get_video_blob("webm")
+    assert blob is not None
+    assert blob["file_path"] == str(p) and blob["etag"] == '"e1"'
+    assert len(cache.list_video_blobs()) == 1
+    # upsert replaces etag
+    cache.record_video_blob("webm", str(p), '"e2"', "t1")
+    assert cache.get_video_blob("webm")["etag"] == '"e2"'
+    removed = cache.delete_video_blob("webm")
+    assert removed == str(p)
+    assert cache.get_video_blob("webm") is None
+    assert cache.delete_video_blob("webm") is None  # idempotent

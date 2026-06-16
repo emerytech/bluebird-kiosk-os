@@ -12,5 +12,19 @@
       "regexFilter": "^https://bluebird-alerts\\.com/[^/]+/legacy-wall/media/(\\d+)/(image|thumb)",
       "resourceTypes": ["image", "xmlhttprequest"]
     }
+  },
+  {
+    "id": 2,
+    "priority": 1,
+    "action": {
+      "type": "redirect",
+      "redirect": {
+        "regexSubstitution": "http://127.0.0.1:7311/legacy-wall/background-video/\\1"
+      }
+    },
+    "condition": {
+      "regexFilter": "^https://bluebird-alerts\\.com/[^/]+/legacy-wall/background-video/(file|mp4|poster)",
+      "resourceTypes": ["media", "xmlhttprequest"]
+    }
   }
 ]

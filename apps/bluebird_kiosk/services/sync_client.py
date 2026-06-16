@@ -48,6 +48,16 @@ LOCAL_CACHE_PATH = Path(
 MEDIA_DIR = Path(
     os.environ.get("BLUEBIRD_LOCAL_MEDIA_DIR", "/var/lib/bluebird-kiosk/media")
 )
+VIDEO_DIR = Path(
+    os.environ.get("BLUEBIRD_LOCAL_VIDEO_DIR", "/var/lib/bluebird-kiosk/video")
+)
+
+# (kiosk URL key in the backgrounds API, local cache 'kind', filename, mime)
+_BG_VIDEO_PARTS = (
+    ("video_url", "webm", "webm.bin"),
+    ("mp4_url", "mp4", "mp4.bin"),
+    ("poster_url", "poster", "poster.bin"),
+)
 
 
 def _now_iso() -> str:
@@ -78,12 +88,18 @@ class SyncClient:
         media_dir: Path,
         session: Optional[requests.Session] = None,
         request_timeout: float = 30.0,
+        slug: str = "",
+        video_dir: Optional[Path] = None,
     ) -> None:
         self.backend = backend.rstrip("/")
         self.token = token
+        self.slug = (slug or "").strip("/")
         self.cache = cache
         self.media_dir = Path(media_dir)
         self.media_dir.mkdir(parents=True, exist_ok=True)
+        # video_dir is created lazily (first download) — its default is a system
+        # path that may not be writable in tests / before first use.
+        self.video_dir = Path(video_dir) if video_dir else VIDEO_DIR
         self.session = session or requests.Session()
         self.session.headers.update(
             {
@@ -272,6 +288,115 @@ class SyncClient:
             except OSError as exc:
                 logger.warning("media %s: unlink failed: %s", media_id, exc)
 
+    # ── Phase 2b: FETCH background video ─────────────────────────────────────
+
+    def fetch_background_video(self) -> Dict[str, Any]:
+        """Download the tenant's Legacy Wall background video (webm + mp4 +
+        poster) into the local cache so the wall plays it from the local cache
+        server instead of re-streaming from the backend on every load / reboot.
+
+        ETag-revalidated against the PUBLIC serve endpoints (Starlette
+        FileResponse sets an ETag), so an unchanged video is a cheap 304 each
+        tick. Soft-fails on any error. If the tenant has no enabled video, any
+        previously-cached files are purged.
+        """
+        if not self.slug:
+            return {"ok": False, "error": "no_slug"}
+        api_url = f"{self.backend}/{self.slug}/legacy-wall/api/backgrounds"
+        try:
+            resp = self.session.get(api_url, timeout=self.request_timeout)
+        except requests.RequestException as exc:
+            logger.warning("bg-video: backgrounds api network error: %s", exc)
+            return {"ok": False, "error": "network"}
+        if resp.status_code >= 400:
+            return {"ok": False, "error": f"http_{resp.status_code}"}
+        try:
+            bgv = (resp.json() or {}).get("background_video")
+        except ValueError:
+            return {"ok": False, "error": "non_json"}
+        if not bgv:
+            # No enabled video — drop anything we cached previously.
+            return {"ok": True, "purged": self._purge_background_video()}
+        fetched = skipped = errored = 0
+        for url_key, kind, fname in _BG_VIDEO_PARTS:
+            rel = bgv.get(url_key)
+            if not rel:
+                # e.g. mp4 absent on a not-yet-dual-encoded row — drop stale.
+                self._purge_video_part(kind)
+                continue
+            full_url = f"{self.backend}{rel}" if rel.startswith("/") else rel
+            outcome = self._download_video_part(kind, fname, full_url)
+            if outcome == "fetched":
+                fetched += 1
+            elif outcome == "skipped":
+                skipped += 1
+            else:
+                errored += 1
+        return {"ok": True, "fetched": fetched, "skipped": skipped, "errored": errored}
+
+    def _download_video_part(self, kind: str, fname: str, url: str) -> str:
+        existing = self.cache.get_video_blob(kind)
+        headers: Dict[str, str] = {}
+        if existing and existing.get("etag"):
+            headers["If-None-Match"] = existing["etag"]
+        try:
+            resp = self.session.get(
+                url, headers=headers, timeout=self.request_timeout, stream=True
+            )
+        except requests.RequestException as exc:
+            logger.warning("bg-video %s: network error: %s", kind, exc)
+            return "errored"
+        if resp.status_code == 304:
+            return "skipped"
+        if resp.status_code == 404:
+            self._purge_video_part(kind)
+            return "errored"
+        if resp.status_code >= 400:
+            logger.warning("bg-video %s: backend status=%s", kind, resp.status_code)
+            return "errored"
+        target = self.video_dir / fname
+        try:
+            self.video_dir.mkdir(parents=True, exist_ok=True)
+            with open(target, "wb") as fh:
+                for chunk in resp.iter_content(chunk_size=64 * 1024):
+                    if chunk:
+                        fh.write(chunk)
+        except OSError as exc:
+            logger.warning("bg-video %s: write failed: %s", kind, exc)
+            return "errored"
+        try:
+            size = target.stat().st_size
+        except OSError:
+            size = 0
+        if size == 0:
+            try:
+                target.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return "errored"
+        self.cache.record_video_blob(
+            kind=kind,
+            file_path=str(target),
+            etag=resp.headers.get("ETag"),
+            fetched_at=_now_iso(),
+        )
+        return "fetched"
+
+    def _purge_video_part(self, kind: str) -> None:
+        fp = self.cache.delete_video_blob(kind)
+        if fp:
+            try:
+                Path(fp).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    def _purge_background_video(self) -> int:
+        purged = 0
+        for blob in self.cache.list_video_blobs():
+            self._purge_video_part(blob["kind"])
+            purged += 1
+        return purged
+
     # ── Phase 3: PUSH ────────────────────────────────────────────────────────
 
     def flush_events(self, batch_size: int = 50) -> Dict[str, Any]:
@@ -318,11 +443,13 @@ class SyncClient:
                 "diagnostics": diag_stats,
             }
         fetch_stats = self.fetch_missing_media()
+        video_stats = self.fetch_background_video()
         push_stats = self.flush_events()
         diag_stats = self.refresh_diagnostics()
         return {
             "manifest": manifest_stats,
             "fetch": fetch_stats,
+            "video": video_stats,
             "push": push_stats,
             "diagnostics": diag_stats,
         }
@@ -343,6 +470,7 @@ class SyncClient:
 def _build_client() -> Optional[SyncClient]:
     cfg = config.read_config()
     backend = cfg.get("BLUEBIRD_BACKEND") or ""
+    slug = cfg.get("SCHOOL_SLUG") or ""
     token = read_license_token()
     if not backend:
         logger.info("sync: BLUEBIRD_BACKEND not set — sleeping")
@@ -352,7 +480,8 @@ def _build_client() -> Optional[SyncClient]:
         return None
     cache = KioskLocalCache(LOCAL_CACHE_PATH)
     return SyncClient(
-        backend=backend, token=token, cache=cache, media_dir=MEDIA_DIR
+        backend=backend, token=token, cache=cache, media_dir=MEDIA_DIR,
+        slug=slug, video_dir=VIDEO_DIR,
     )
 
 

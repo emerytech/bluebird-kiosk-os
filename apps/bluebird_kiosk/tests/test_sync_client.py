@@ -249,3 +249,81 @@ def test_flush_events_keeps_on_failure(tmp_path: Path):
     assert stats["sent"] == 0
     # Still pending for retry next tick.
     assert client.cache.pending_event_count() == 1
+
+
+# ── fetch_background_video ────────────────────────────────────────────────────
+
+
+def _client_with_slug(tmp_path: Path, session: MagicMock, slug: str = "jefferson") -> SyncClient:
+    cache = KioskLocalCache(tmp_path / "cache.db")
+    client = SyncClient(
+        backend="https://backend.example",
+        token="tok",
+        cache=cache,
+        media_dir=tmp_path / "media",
+        session=session,
+        slug=slug,
+        video_dir=tmp_path / "video",
+    )
+    client.video_dir.mkdir(parents=True, exist_ok=True)
+    return client
+
+
+def test_fetch_background_video_downloads_all_parts(tmp_path: Path):
+    session = MagicMock(); session.headers = {}
+    client = _client_with_slug(tmp_path, session)
+    api = FakeResponse(json_body={"background_video": {
+        "video_url": "/jefferson/legacy-wall/background-video/file",
+        "mp4_url": "/jefferson/legacy-wall/background-video/mp4",
+        "poster_url": "/jefferson/legacy-wall/background-video/poster",
+    }})
+    session.get.side_effect = [
+        api,
+        FakeResponse(body_bytes=b"WEBM", headers={"ETag": '"w"'}),
+        FakeResponse(body_bytes=b"MP4", headers={"ETag": '"m"'}),
+        FakeResponse(body_bytes=b"JPG", headers={"ETag": '"p"'}),
+    ]
+    stats = client.fetch_background_video()
+    assert stats["ok"] and stats["fetched"] == 3
+    assert client.cache.get_video_blob("webm")["etag"] == '"w"'
+    assert (client.video_dir / "webm.bin").read_bytes() == b"WEBM"
+    assert (client.video_dir / "mp4.bin").read_bytes() == b"MP4"
+    assert (client.video_dir / "poster.bin").read_bytes() == b"JPG"
+
+
+def test_fetch_background_video_no_video_purges_cache(tmp_path: Path):
+    session = MagicMock(); session.headers = {}
+    client = _client_with_slug(tmp_path, session)
+    p = client.video_dir / "webm.bin"; p.write_bytes(b"old")
+    client.cache.record_video_blob("webm", str(p), '"w"', "t0")
+    session.get.side_effect = [FakeResponse(json_body={"background_video": None})]
+    stats = client.fetch_background_video()
+    assert stats["ok"] and stats["purged"] == 1
+    assert client.cache.get_video_blob("webm") is None
+    assert not p.exists()
+
+
+def test_fetch_background_video_304_keeps_cached(tmp_path: Path):
+    session = MagicMock(); session.headers = {}
+    client = _client_with_slug(tmp_path, session)
+    p = client.video_dir / "webm.bin"; p.write_bytes(b"cached")
+    client.cache.record_video_blob("webm", str(p), '"w"', "t0")
+    session.get.side_effect = [
+        FakeResponse(json_body={"background_video": {
+            "video_url": "/jefferson/legacy-wall/background-video/file"}}),
+        FakeResponse(status_code=304),
+    ]
+    stats = client.fetch_background_video()
+    assert stats["skipped"] == 1 and stats["fetched"] == 0
+    assert p.read_bytes() == b"cached"  # untouched
+
+
+def test_fetch_background_video_no_slug_noops(tmp_path: Path):
+    session = MagicMock(); session.headers = {}
+    cache = KioskLocalCache(tmp_path / "cache.db")
+    client = SyncClient(
+        backend="https://b.example", token="t", cache=cache,
+        media_dir=tmp_path / "media", session=session, slug="", video_dir=tmp_path / "video")
+    stats = client.fetch_background_video()
+    assert stats == {"ok": False, "error": "no_slug"}
+    session.get.assert_not_called()

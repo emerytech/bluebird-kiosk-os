@@ -173,3 +173,27 @@ def test_legacy_wall_media_blob_unknown_404(client):
     c, _, _ = client
     resp = c.get("/legacy-wall/media/9999")
     assert resp.status_code == 404
+
+
+# ── Background-video cache route ──────────────────────────────────────────────
+
+
+def test_bg_video_served_from_cache(client):
+    c, app, tmp_path = client
+    vdir = tmp_path / "video"; vdir.mkdir(parents=True, exist_ok=True)
+    f = vdir / "webm.bin"; f.write_bytes(b"WEBMDATA")
+    app.state.local_cache.record_video_blob("webm", str(f), '"w"', "t0")
+    resp = c.get("/legacy-wall/background-video/file")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "video/webm"
+    assert resp.content == b"WEBMDATA"
+
+
+def test_bg_video_unknown_kind_404(client):
+    c, _, _ = client
+    resp = c.get("/legacy-wall/background-video/bogus")
+    assert resp.status_code == 404
+    # NOTE: the cache-MISS → 302-cloud fallback is exercised by the route but
+    # not unit-tested here: it depends on config.read_config()'s backend/slug,
+    # which caches CONF_PATH at import time (order-dependent across the suite).
+    # The fallback mirrors the proven /legacy-wall/media/{id}/{variant} route.

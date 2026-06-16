@@ -430,6 +430,50 @@ def create_app() -> FastAPI:
         cloud_url = f"{backend}/{slug}/legacy-wall/media/{int(media_id)}/{variant}"
         return RedirectResponse(url=cloud_url, status_code=302)
 
+    @app.get("/legacy-wall/background-video/{kind}")
+    async def legacy_wall_background_video(request: Request, kind: str):
+        """Serve the locally-cached Legacy Wall background video so the wall
+        plays the aerial loop from disk rather than re-streaming the backend on
+        every page load / reboot.
+
+        The bluebird_kiosk_cache_ext extension rewrites the cloud URLs
+            /<slug>/legacy-wall/background-video/(file|mp4|poster)
+        to us. `file`→webm, `mp4`→H.264, `poster`→JPEG. Starlette's
+        FileResponse serves HTTP Range (206) natively, so video seeking works.
+        Cache miss → 302 to the cloud (source of truth), same as images.
+        """
+        blob_kind = {"file": "webm", "mp4": "mp4", "poster": "poster"}.get(kind)
+        if blob_kind is None:
+            raise HTTPException(status_code=404, detail="unknown_kind")
+        cache: KioskLocalCache = request.app.state.local_cache
+        blob = cache.get_video_blob(blob_kind)
+        if blob:
+            file_path = blob.get("file_path")
+            if file_path and os.path.isfile(file_path):
+                try:
+                    size_ok = os.path.getsize(file_path) > 0
+                except OSError:
+                    size_ok = False
+                if size_ok:
+                    mt = {
+                        "webm": "video/webm",
+                        "mp4": "video/mp4",
+                        "poster": "image/jpeg",
+                    }[blob_kind]
+                    return FileResponse(
+                        path=file_path,
+                        media_type=mt,
+                        headers={"Cache-Control": "private, max-age=86400"},
+                    )
+        # Cache miss — fall through to the cloud (it may not have synced yet).
+        cfg = config.read_config()
+        backend = (cfg.get("BLUEBIRD_BACKEND") or "").rstrip("/")
+        slug = (cfg.get("SCHOOL_SLUG") or "").strip("/")
+        if not backend or not slug:
+            raise HTTPException(status_code=404, detail="no_backend_for_fallback")
+        cloud_url = f"{backend}/{slug}/legacy-wall/background-video/{kind}"
+        return RedirectResponse(url=cloud_url, status_code=302)
+
     # ── Admin overlay (PIN-gated) ────────────────────────────────────────────
 
     def require_admin(

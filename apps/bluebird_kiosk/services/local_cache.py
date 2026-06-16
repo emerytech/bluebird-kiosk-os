@@ -64,6 +64,18 @@ CREATE TABLE IF NOT EXISTS media_blobs (
     file_path   TEXT    NOT NULL,
     fetched_at  TEXT    NOT NULL
 );
+
+-- The Legacy Wall background VIDEO (one per tenant/kiosk). Keyed by 'kind'
+-- ('webm' | 'mp4' | 'poster') since there is only ever one video per kiosk.
+-- Downloaded proactively by sync_client (ETag-revalidated) and served from the
+-- local cache server so the wall plays the aerial loop without re-streaming
+-- from the backend on every page load / reboot.
+CREATE TABLE IF NOT EXISTS video_blobs (
+    kind        TEXT    PRIMARY KEY,
+    etag        TEXT    NULL,
+    file_path   TEXT    NOT NULL,
+    fetched_at  TEXT    NOT NULL
+);
 """
 
 
@@ -237,6 +249,46 @@ class KioskLocalCache:
             conn.execute(
                 "DELETE FROM media_blobs WHERE media_id = ?", (int(media_id),)
             )
+        return row["file_path"]
+
+    # ── Background-video blob tracking ───────────────────────────────────────
+
+    def get_video_blob(self, kind: str) -> Optional[Dict[str, Any]]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM video_blobs WHERE kind = ?", (kind,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_video_blobs(self) -> List[Dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT * FROM video_blobs").fetchall()
+        return [dict(r) for r in rows]
+
+    def record_video_blob(
+        self, kind: str, file_path: str, etag: Optional[str], fetched_at: str
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO video_blobs (kind, etag, file_path, fetched_at) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(kind) DO UPDATE SET "
+                "    etag = excluded.etag, "
+                "    file_path = excluded.file_path, "
+                "    fetched_at = excluded.fetched_at",
+                (kind, etag, file_path, fetched_at),
+            )
+
+    def delete_video_blob(self, kind: str) -> Optional[str]:
+        """Remove the row, returning the on-disk file_path so the caller can
+        unlink it."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT file_path FROM video_blobs WHERE kind = ?", (kind,)
+            ).fetchone()
+            if row is None:
+                return None
+            conn.execute("DELETE FROM video_blobs WHERE kind = ?", (kind,))
         return row["file_path"]
 
     # ── Outbound event queue ─────────────────────────────────────────────────
