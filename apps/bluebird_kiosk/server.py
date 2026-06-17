@@ -38,6 +38,23 @@ LOCAL_CACHE_DB = os.environ.get(
 )
 
 
+# Origins allowed to call this loopback server cross-origin. The cloud Legacy
+# Wall page (running in the kiosk Chromium window) talks to 127.0.0.1:7311 both
+# for the Kiosk Settings POST and for the GET routes the wall polls — above all
+# the active-incident takeover. A cross-origin fetch needs Access-Control-Allow-
+# Origin echoed back or the browser discards the response. Single source of truth,
+# shared by the /legacy-wall/* CORS middleware and the Settings _cors_headers().
+_CORS_ORIGINS = {
+    "https://bluebirdalerts.com",
+    "https://www.bluebirdalerts.com",
+    "https://bluebird-alerts.com",
+    "https://www.bluebird-alerts.com",
+    # White-label LW domain — kiosks point Chromium here so the branded display
+    # doesn't read "bluebird-alerts.com".
+    "https://legacy.ets3d.com",
+}
+
+
 # ── Pydantic request bodies ───────────────────────────────────────────────────
 # Defined at module scope, NOT inside create_app(): FastAPI introspects route
 # signatures with typing.get_type_hints() which only sees module globals, so
@@ -191,6 +208,27 @@ def create_app() -> FastAPI:
         if request.url.path != "/_health":
             request.app.state.last_page_activity = time.monotonic()
         return await call_next(request)
+
+    @app.middleware("http")
+    async def _legacy_wall_loopback_cors(request: Request, call_next):
+        # The cloud Legacy Wall page (HTTPS) reads loopback GET routes
+        # cross-origin via fetch() — above all the active-incident takeover
+        # poll. A cross-origin fetch needs Access-Control-Allow-Origin or the
+        # browser DISCARDS the response: the request still reaches us (200 in
+        # the access log), but the page's .then() never sees the body, the
+        # fetch rejects, and the takeover's .catch hides the modal — so an
+        # EMERGENCY ALERT silently fails to show on the kiosk even though every
+        # server-side check passes from curl. Echo the Origin for trusted wall
+        # hosts on /legacy-wall/* responses. These are simple GETs (no custom
+        # headers), so no preflight is involved; the Kiosk Settings POST at
+        # /admin/* sets its own fuller CORS/PNA headers via _cors_headers().
+        resp = await call_next(request)
+        if request.url.path.startswith("/legacy-wall/"):
+            origin = (request.headers.get("origin") or "").lower()
+            if origin in _CORS_ORIGINS:
+                resp.headers["Access-Control-Allow-Origin"] = origin
+                resp.headers.setdefault("Vary", "Origin")
+        return resp
     app.mount(
         "/static",
         StaticFiles(directory=str(HERE / "web" / "static")),
@@ -725,21 +763,8 @@ def create_app() -> FastAPI:
     # crosses origins. The launched overlay has its own PIN gate, so the
     # surface this exposes to a (hypothetical) cross-origin attacker is
     # "the same thing that a 5-finger gesture or Ctrl+Alt+B would do" —
-    # i.e. open a PIN prompt. CORS is locked to the canonical cloud host.
-    _CORS_ORIGINS = {
-        "https://bluebirdalerts.com",
-        "https://www.bluebirdalerts.com",
-        "https://bluebird-alerts.com",
-        "https://www.bluebird-alerts.com",
-        # White-label LW domain — kiosks point chromium at this so the
-        # branded display doesn't say "bluebird-alerts.com". The Kiosk
-        # Settings cross-origin POST originates from here, so it MUST
-        # be in the allowlist or the browser silently drops the POST
-        # after the OPTIONS preflight succeeds (no Allow-Origin header
-        # → fetch hangs, no .then / .catch fires; eventually .catch
-        # produces "Kiosk admin server unreachable").
-        "https://legacy.ets3d.com",
-    }
+    # i.e. open a PIN prompt. CORS is locked to the cloud wall hosts via the
+    # module-level _CORS_ORIGINS allowlist (see top of file).
 
     def _cors_headers(request: Request) -> Dict[str, str]:
         origin = (request.headers.get("origin") or "").lower()
