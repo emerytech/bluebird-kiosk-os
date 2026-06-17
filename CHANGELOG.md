@@ -4,6 +4,10 @@ Most recent first. These notes are shown in the admin overlay before you apply a
 kiosk update, so an operator can see what an update will install before confirming.
 
 ## 2026-06-17
+- **Digital signage (Beacon):** a kiosk can now be assigned a BlueBird Beacon
+  signage display from the admin console. When assigned it switches to showing
+  that display; the full-screen emergency takeover still appears during an alert,
+  exactly as on the Legacy Wall. Unassigned kiosks are unaffected.
 - **Video caching:** background-rotation and on-demand aerial videos now play from
   the on-device cache instead of re-streaming from the internet on every cycle —
   cutting wall bandwidth sharply and keeping videos playing through brief network
