@@ -76,6 +76,22 @@ CREATE TABLE IF NOT EXISTS video_blobs (
     file_path   TEXT    NOT NULL,
     fetched_at  TEXT    NOT NULL
 );
+
+-- Legacy Wall background-ROTATION / on-demand aerial videos, addressed by
+-- ?video_id=N (there can be several per kiosk), as opposed to the single
+-- designated background in video_blobs above. Keyed by (video_id, kind) where
+-- kind is 'webm' | 'mp4' | 'poster'. Downloaded by sync_client from the
+-- backgrounds API's slideshow_videos[] and served by the local cache server for
+-- /legacy-wall/background-video/<kind>?video_id=N so rotation clips play from
+-- disk instead of re-streaming the backend on every cycle (KI-033).
+CREATE TABLE IF NOT EXISTS rotation_video_blobs (
+    video_id    INTEGER NOT NULL,
+    kind        TEXT    NOT NULL,
+    etag        TEXT    NULL,
+    file_path   TEXT    NOT NULL,
+    fetched_at  TEXT    NOT NULL,
+    PRIMARY KEY (video_id, kind)
+);
 """
 
 
@@ -290,6 +306,81 @@ class KioskLocalCache:
                 return None
             conn.execute("DELETE FROM video_blobs WHERE kind = ?", (kind,))
         return row["file_path"]
+
+    # ── Rotation / on-demand aerial video blob tracking (?video_id=N) ────────
+
+    def get_rotation_video_blob(
+        self, video_id: int, kind: str
+    ) -> Optional[Dict[str, Any]]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM rotation_video_blobs "
+                "WHERE video_id = ? AND kind = ?",
+                (int(video_id), kind),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_rotation_video_blobs(self) -> List[Dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM rotation_video_blobs ORDER BY video_id, kind"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def record_rotation_video_blob(
+        self,
+        video_id: int,
+        kind: str,
+        file_path: str,
+        etag: Optional[str],
+        fetched_at: str,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO rotation_video_blobs "
+                "(video_id, kind, etag, file_path, fetched_at) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(video_id, kind) DO UPDATE SET "
+                "    etag = excluded.etag, "
+                "    file_path = excluded.file_path, "
+                "    fetched_at = excluded.fetched_at",
+                (int(video_id), kind, etag, file_path, fetched_at),
+            )
+
+    def delete_rotation_video_blob(
+        self, video_id: int, kind: str
+    ) -> Optional[str]:
+        """Remove one (video_id, kind) row, returning its on-disk file_path so
+        the caller can unlink it."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT file_path FROM rotation_video_blobs "
+                "WHERE video_id = ? AND kind = ?",
+                (int(video_id), kind),
+            ).fetchone()
+            if row is None:
+                return None
+            conn.execute(
+                "DELETE FROM rotation_video_blobs "
+                "WHERE video_id = ? AND kind = ?",
+                (int(video_id), kind),
+            )
+        return row["file_path"]
+
+    def delete_rotation_video(self, video_id: int) -> List[str]:
+        """Remove ALL parts of one rotation video, returning their on-disk
+        file_paths so the caller can unlink them (used when an admin de-selects
+        a video from the rotation)."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT file_path FROM rotation_video_blobs WHERE video_id = ?",
+                (int(video_id),),
+            ).fetchall()
+            conn.execute(
+                "DELETE FROM rotation_video_blobs WHERE video_id = ?",
+                (int(video_id),),
+            )
+        return [r["file_path"] for r in rows]
 
     # ── Outbound event queue ─────────────────────────────────────────────────
 
