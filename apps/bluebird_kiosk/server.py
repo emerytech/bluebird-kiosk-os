@@ -445,21 +445,34 @@ def create_app() -> FastAPI:
 
     @app.get("/legacy-wall/background-video/{kind}")
     async def legacy_wall_background_video(request: Request, kind: str):
-        """Serve the locally-cached Legacy Wall background video so the wall
-        plays the aerial loop from disk rather than re-streaming the backend on
-        every page load / reboot.
+        """Serve a locally-cached Legacy Wall video so the wall plays from disk
+        rather than re-streaming the backend on every page load / reboot / cycle.
 
-        The bluebird_kiosk_cache_ext extension rewrites the cloud URLs
-            /<slug>/legacy-wall/background-video/(file|mp4|poster)
-        to us. `file`→webm, `mp4`→H.264, `poster`→JPEG. Starlette's
+        The kiosk_cache shim (_LW_PUBLIC_SHELL) rewrites the cloud URLs
+            /<slug>/legacy-wall/background-video/(file|mp4|poster)[?video_id=N]
+        to us. `file`→webm, `mp4`→H.264, `poster`→JPEG. A BARE request serves the
+        single designated wall background (video_blobs); `?video_id=N` serves a
+        rotation / on-demand aerial clip (rotation_video_blobs). Starlette's
         FileResponse serves HTTP Range (206) natively, so video seeking works.
-        Cache miss → 302 to the cloud (source of truth), same as images.
+        Cache miss → 302 to the cloud (source of truth, PRESERVING ?video_id=N),
+        same as images — so an un-synced clip still plays.
         """
         blob_kind = {"file": "webm", "mp4": "mp4", "poster": "poster"}.get(kind)
         if blob_kind is None:
             raise HTTPException(status_code=404, detail="unknown_kind")
         cache: KioskLocalCache = request.app.state.local_cache
-        blob = cache.get_video_blob(blob_kind)
+        # ?video_id=N → a per-id rotation/aerial clip; bare → the designated bg.
+        video_id = None
+        raw_vid = request.query_params.get("video_id")
+        if raw_vid is not None:
+            try:
+                video_id = int(raw_vid)
+            except (TypeError, ValueError):
+                video_id = None
+        if video_id is not None:
+            blob = cache.get_rotation_video_blob(video_id, blob_kind)
+        else:
+            blob = cache.get_video_blob(blob_kind)
         if blob:
             file_path = blob.get("file_path")
             if file_path and os.path.isfile(file_path):
@@ -485,6 +498,8 @@ def create_app() -> FastAPI:
         if not backend or not slug:
             raise HTTPException(status_code=404, detail="no_backend_for_fallback")
         cloud_url = f"{backend}/{slug}/legacy-wall/background-video/{kind}"
+        if video_id is not None:
+            cloud_url += f"?video_id={video_id}"
         return RedirectResponse(url=cloud_url, status_code=302)
 
     # ── Admin overlay (PIN-gated) ────────────────────────────────────────────

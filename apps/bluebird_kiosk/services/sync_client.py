@@ -291,14 +291,16 @@ class SyncClient:
     # ── Phase 2b: FETCH background video ─────────────────────────────────────
 
     def fetch_background_video(self) -> Dict[str, Any]:
-        """Download the tenant's Legacy Wall background video (webm + mp4 +
-        poster) into the local cache so the wall plays it from the local cache
-        server instead of re-streaming from the backend on every load / reboot.
+        """Download the tenant's Legacy Wall videos into the local cache so the
+        wall plays them from the local cache server instead of re-streaming the
+        backend on every load / reboot / rotation cycle (KI-033).
 
-        ETag-revalidated against the PUBLIC serve endpoints (Starlette
-        FileResponse sets an ETag), so an unchanged video is a cheap 304 each
-        tick. Soft-fails on any error. If the tenant has no enabled video, any
-        previously-cached files are purged.
+        Two sets: the single DESIGNATED wall background (bare URL → video_blobs)
+        and the background-ROTATION / on-demand aerial clips (?video_id=N →
+        rotation_video_blobs). Both are ETag-revalidated against the PUBLIC serve
+        endpoints (Starlette FileResponse sets an ETag), so an unchanged video is
+        a cheap 304 each tick. Soft-fails on any error. De-selected videos (and a
+        removed designated video) have their cached files purged.
         """
         if not self.slug:
             return {"ok": False, "error": "no_slug"}
@@ -311,49 +313,62 @@ class SyncClient:
         if resp.status_code >= 400:
             return {"ok": False, "error": f"http_{resp.status_code}"}
         try:
-            bgv = (resp.json() or {}).get("background_video")
+            data = resp.json() or {}
         except ValueError:
             return {"ok": False, "error": "non_json"}
+        bgv = data.get("background_video")
+        # ── Designated wall background (single, bare URL) ──
         if not bgv:
-            # No enabled video — drop anything we cached previously.
-            return {"ok": True, "purged": self._purge_background_video()}
-        fetched = skipped = errored = 0
-        for url_key, kind, fname in _BG_VIDEO_PARTS:
-            rel = bgv.get(url_key)
-            if not rel:
-                # e.g. mp4 absent on a not-yet-dual-encoded row — drop stale.
-                self._purge_video_part(kind)
-                continue
-            full_url = f"{self.backend}{rel}" if rel.startswith("/") else rel
-            outcome = self._download_video_part(kind, fname, full_url)
-            if outcome == "fetched":
-                fetched += 1
-            elif outcome == "skipped":
-                skipped += 1
-            else:
-                errored += 1
-        return {"ok": True, "fetched": fetched, "skipped": skipped, "errored": errored}
+            # No enabled designated video — drop anything we cached previously.
+            result: Dict[str, Any] = {"ok": True, "purged": self._purge_background_video()}
+        else:
+            fetched = skipped = errored = 0
+            for url_key, kind, fname in _BG_VIDEO_PARTS:
+                rel = bgv.get(url_key)
+                if not rel:
+                    # e.g. mp4 absent on a not-yet-dual-encoded row — drop stale.
+                    self._purge_video_part(kind)
+                    continue
+                full_url = f"{self.backend}{rel}" if rel.startswith("/") else rel
+                outcome = self._download_video_part(kind, fname, full_url)
+                if outcome == "fetched":
+                    fetched += 1
+                elif outcome == "skipped":
+                    skipped += 1
+                else:
+                    errored += 1
+            result = {"ok": True, "fetched": fetched, "skipped": skipped, "errored": errored}
+        # ── Background-rotation / on-demand aerial clips (?video_id=N) ──
+        result["rotation"] = self._sync_rotation_videos(
+            data.get("slideshow_videos") or []
+        )
+        return result
 
-    def _download_video_part(self, kind: str, fname: str, url: str) -> str:
-        existing = self.cache.get_video_blob(kind)
+    def _fetch_blob_to_file(
+        self, url: str, etag: Optional[str], fname: str, label: str
+    ) -> tuple:
+        """Shared GET→file for a video blob. Returns (outcome, new_etag) where
+        outcome is 'fetched' | 'skipped' | 'notfound' | 'errored'. On 'fetched'
+        a non-empty file is written to self.video_dir/fname and new_etag is the
+        response ETag; 'notfound' (404) signals the caller to purge. Never
+        raises — every failure is logged and soft-returned."""
         headers: Dict[str, str] = {}
-        if existing and existing.get("etag"):
-            headers["If-None-Match"] = existing["etag"]
+        if etag:
+            headers["If-None-Match"] = etag
         try:
             resp = self.session.get(
                 url, headers=headers, timeout=self.request_timeout, stream=True
             )
         except requests.RequestException as exc:
-            logger.warning("bg-video %s: network error: %s", kind, exc)
-            return "errored"
+            logger.warning("%s: network error: %s", label, exc)
+            return ("errored", None)
         if resp.status_code == 304:
-            return "skipped"
+            return ("skipped", None)
         if resp.status_code == 404:
-            self._purge_video_part(kind)
-            return "errored"
+            return ("notfound", None)
         if resp.status_code >= 400:
-            logger.warning("bg-video %s: backend status=%s", kind, resp.status_code)
-            return "errored"
+            logger.warning("%s: backend status=%s", label, resp.status_code)
+            return ("errored", None)
         target = self.video_dir / fname
         try:
             self.video_dir.mkdir(parents=True, exist_ok=True)
@@ -362,8 +377,8 @@ class SyncClient:
                     if chunk:
                         fh.write(chunk)
         except OSError as exc:
-            logger.warning("bg-video %s: write failed: %s", kind, exc)
-            return "errored"
+            logger.warning("%s: write failed: %s", label, exc)
+            return ("errored", None)
         try:
             size = target.stat().st_size
         except OSError:
@@ -373,14 +388,25 @@ class SyncClient:
                 target.unlink(missing_ok=True)
             except OSError:
                 pass
-            return "errored"
-        self.cache.record_video_blob(
-            kind=kind,
-            file_path=str(target),
-            etag=resp.headers.get("ETag"),
-            fetched_at=_now_iso(),
+            return ("errored", None)
+        return ("fetched", resp.headers.get("ETag"))
+
+    def _download_video_part(self, kind: str, fname: str, url: str) -> str:
+        existing = self.cache.get_video_blob(kind)
+        outcome, new_etag = self._fetch_blob_to_file(
+            url, (existing or {}).get("etag"), fname, "bg-video %s" % kind
         )
-        return "fetched"
+        if outcome == "notfound":
+            self._purge_video_part(kind)
+            return "errored"
+        if outcome == "fetched":
+            self.cache.record_video_blob(
+                kind=kind,
+                file_path=str(self.video_dir / fname),
+                etag=new_etag,
+                fetched_at=_now_iso(),
+            )
+        return outcome if outcome in ("fetched", "skipped") else "errored"
 
     def _purge_video_part(self, kind: str) -> None:
         fp = self.cache.delete_video_blob(kind)
@@ -396,6 +422,98 @@ class SyncClient:
             self._purge_video_part(blob["kind"])
             purged += 1
         return purged
+
+    def _sync_rotation_videos(self, slideshow_videos: List[Any]) -> Dict[str, Any]:
+        """Mirror each background-rotation video (addressed by ?video_id=N) into
+        the local cache, and purge any cached rotation video no longer selected.
+        A designated video that is ALSO in the rotation appears here with a BARE
+        url (no video_id=) — it is already cached as the single background, so we
+        skip it. Makes NO network calls when there are no per-id rotation videos
+        (so a tenant without rotation costs only one local DB read)."""
+        keep_ids = set()
+        fetched = skipped = errored = 0
+        for entry in slideshow_videos:
+            if not isinstance(entry, dict):
+                continue
+            vid = entry.get("id")
+            # Only per-id entries are ours; the designated (bare-url) video is
+            # served from the single-background cache, not by video_id.
+            if vid is None or "video_id=" not in (entry.get("video_url") or ""):
+                continue
+            try:
+                vid = int(vid)
+            except (TypeError, ValueError):
+                continue
+            keep_ids.add(vid)
+            for url_key, kind, fname in _BG_VIDEO_PARTS:
+                rel = entry.get(url_key)
+                if not rel:
+                    self._purge_rotation_part(vid, kind)
+                    continue
+                full_url = f"{self.backend}{rel}" if rel.startswith("/") else rel
+                outcome = self._download_rotation_part(
+                    vid, kind, f"rot-{vid}-{fname}", full_url
+                )
+                if outcome == "fetched":
+                    fetched += 1
+                elif outcome == "skipped":
+                    skipped += 1
+                else:
+                    errored += 1
+        purged = self._purge_rotation_videos_except(keep_ids)
+        return {
+            "fetched": fetched,
+            "skipped": skipped,
+            "errored": errored,
+            "purged": purged,
+        }
+
+    def _download_rotation_part(
+        self, video_id: int, kind: str, fname: str, url: str
+    ) -> str:
+        existing = self.cache.get_rotation_video_blob(video_id, kind)
+        outcome, new_etag = self._fetch_blob_to_file(
+            url,
+            (existing or {}).get("etag"),
+            fname,
+            "rot-video %s/%s" % (video_id, kind),
+        )
+        if outcome == "notfound":
+            self._purge_rotation_part(video_id, kind)
+            return "errored"
+        if outcome == "fetched":
+            self.cache.record_rotation_video_blob(
+                video_id=video_id,
+                kind=kind,
+                file_path=str(self.video_dir / fname),
+                etag=new_etag,
+                fetched_at=_now_iso(),
+            )
+        return outcome if outcome in ("fetched", "skipped") else "errored"
+
+    def _purge_rotation_part(self, video_id: int, kind: str) -> None:
+        fp = self.cache.delete_rotation_video_blob(video_id, kind)
+        if fp:
+            try:
+                Path(fp).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    def _purge_rotation_videos_except(self, keep_ids: set) -> int:
+        """Drop cached rotation videos whose id is no longer selected. Returns
+        the number of distinct videos purged."""
+        stale_ids = {
+            blob["video_id"]
+            for blob in self.cache.list_rotation_video_blobs()
+            if blob["video_id"] not in keep_ids
+        }
+        for vid in stale_ids:
+            for fp in self.cache.delete_rotation_video(vid):
+                try:
+                    Path(fp).unlink(missing_ok=True)
+                except OSError:
+                    pass
+        return len(stale_ids)
 
     # ── Phase 3: PUSH ────────────────────────────────────────────────────────
 

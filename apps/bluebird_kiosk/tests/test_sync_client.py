@@ -327,3 +327,88 @@ def test_fetch_background_video_no_slug_noops(tmp_path: Path):
     stats = client.fetch_background_video()
     assert stats == {"ok": False, "error": "no_slug"}
     session.get.assert_not_called()
+
+
+# ── rotation videos (?video_id=N) ─────────────────────────────────────────────
+
+
+def test_fetch_rotation_videos_downloads_by_id(tmp_path: Path):
+    # KI-033: rotation clips (?video_id=N) are mirrored into per-id files.
+    session = MagicMock(); session.headers = {}
+    client = _client_with_slug(tmp_path, session)
+    api = FakeResponse(json_body={
+        "background_video": None,
+        "slideshow_videos": [{
+            "id": 7,
+            "video_url": "/jefferson/legacy-wall/background-video/file?video_id=7",
+            "mp4_url": "/jefferson/legacy-wall/background-video/mp4?video_id=7",
+            "poster_url": "/jefferson/legacy-wall/background-video/poster?video_id=7",
+        }],
+    })
+    session.get.side_effect = [
+        api,
+        FakeResponse(body_bytes=b"W7", headers={"ETag": '"w7"'}),
+        FakeResponse(body_bytes=b"M7", headers={"ETag": '"m7"'}),
+        FakeResponse(body_bytes=b"P7", headers={"ETag": '"p7"'}),
+    ]
+    stats = client.fetch_background_video()
+    assert stats["ok"] and stats["rotation"]["fetched"] == 3
+    assert client.cache.get_rotation_video_blob(7, "webm")["etag"] == '"w7"'
+    assert (client.video_dir / "rot-7-webm.bin").read_bytes() == b"W7"
+    assert (client.video_dir / "rot-7-mp4.bin").read_bytes() == b"M7"
+    assert (client.video_dir / "rot-7-poster.bin").read_bytes() == b"P7"
+
+
+def test_fetch_rotation_skips_bare_designated_entry(tmp_path: Path):
+    # A designated video that is also in_slideshow appears with a BARE url and
+    # must NOT be re-fetched as a per-id rotation blob (zero extra HTTP calls).
+    session = MagicMock(); session.headers = {}
+    client = _client_with_slug(tmp_path, session)
+    session.get.side_effect = [FakeResponse(json_body={
+        "background_video": None,
+        "slideshow_videos": [{
+            "id": 2,
+            "video_url": "/jefferson/legacy-wall/background-video/file",
+        }],
+    })]
+    stats = client.fetch_background_video()
+    assert stats["rotation"]["fetched"] == 0
+    assert client.cache.list_rotation_video_blobs() == []
+
+
+def test_fetch_rotation_purges_deselected(tmp_path: Path):
+    # A previously-cached rotation video no longer in slideshow_videos is purged.
+    session = MagicMock(); session.headers = {}
+    client = _client_with_slug(tmp_path, session)
+    p = client.video_dir / "rot-9-webm.bin"; p.write_bytes(b"old9")
+    client.cache.record_rotation_video_blob(9, "webm", str(p), '"w9"', "t0")
+    session.get.side_effect = [
+        FakeResponse(json_body={
+            "background_video": None,
+            "slideshow_videos": [{
+                "id": 7,
+                "video_url": "/jefferson/legacy-wall/background-video/file?video_id=7",
+            }],
+        }),
+        FakeResponse(body_bytes=b"W7", headers={"ETag": '"w7"'}),
+    ]
+    stats = client.fetch_background_video()
+    assert stats["rotation"]["fetched"] == 1 and stats["rotation"]["purged"] == 1
+    assert client.cache.get_rotation_video_blob(9, "webm") is None
+    assert not p.exists()
+    assert client.cache.get_rotation_video_blob(7, "webm") is not None
+
+
+def test_fetch_background_video_no_slideshow_key_backward_compatible(tmp_path: Path):
+    # An older backend with no slideshow_videos key: designated still works,
+    # rotation is all-zero, and no extra HTTP calls are made.
+    session = MagicMock(); session.headers = {}
+    client = _client_with_slug(tmp_path, session)
+    session.get.side_effect = [
+        FakeResponse(json_body={"background_video": {
+            "video_url": "/jefferson/legacy-wall/background-video/file"}}),
+        FakeResponse(body_bytes=b"W", headers={"ETag": '"w"'}),
+    ]
+    stats = client.fetch_background_video()
+    assert stats["fetched"] == 1                      # designated unchanged
+    assert stats["rotation"] == {"fetched": 0, "skipped": 0, "errored": 0, "purged": 0}

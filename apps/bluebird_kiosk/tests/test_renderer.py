@@ -197,3 +197,28 @@ def test_bg_video_unknown_kind_404(client):
     # not unit-tested here: it depends on config.read_config()'s backend/slug,
     # which caches CONF_PATH at import time (order-dependent across the suite).
     # The fallback mirrors the proven /legacy-wall/media/{id}/{variant} route.
+
+
+def test_bg_video_rotation_served_by_video_id(client):
+    # KI-033: ?video_id=N serves the per-id rotation blob, not the designated bg.
+    c, app, tmp_path = client
+    vdir = tmp_path / "video"; vdir.mkdir(parents=True, exist_ok=True)
+    f = vdir / "rot-7-webm.bin"; f.write_bytes(b"ROT7WEBM")
+    app.state.local_cache.record_rotation_video_blob(7, "webm", str(f), '"r"', "t0")
+    resp = c.get("/legacy-wall/background-video/file?video_id=7")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "video/webm"
+    assert resp.content == b"ROT7WEBM"
+
+
+def test_bg_video_designated_and_rotation_are_separate(client):
+    # A bare request serves the designated blob; ?video_id=N serves the rotation
+    # blob — the two must never cross-serve.
+    c, app, tmp_path = client
+    vdir = tmp_path / "video"; vdir.mkdir(parents=True, exist_ok=True)
+    desig = vdir / "webm.bin"; desig.write_bytes(b"DESIG")
+    rot = vdir / "rot-7-webm.bin"; rot.write_bytes(b"ROT7")
+    app.state.local_cache.record_video_blob("webm", str(desig), '"d"', "t0")
+    app.state.local_cache.record_rotation_video_blob(7, "webm", str(rot), '"r"', "t0")
+    assert c.get("/legacy-wall/background-video/file").content == b"DESIG"
+    assert c.get("/legacy-wall/background-video/file?video_id=7").content == b"ROT7"

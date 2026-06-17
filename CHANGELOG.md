@@ -3,6 +3,12 @@
 Most recent first. These notes are shown in the admin overlay before you apply a
 kiosk update, so an operator can see what an update will install before confirming.
 
+## 2026-06-17
+- **Video caching:** background-rotation and on-demand aerial videos now play from
+  the on-device cache instead of re-streaming from the internet on every cycle —
+  cutting wall bandwidth sharply and keeping videos playing through brief network
+  outages (the photo cache already worked this way).
+
 ## 2026-06-16
 - **Update preview:** pressing **Update kiosk** now shows these change notes and
   asks you to confirm before anything is installed.

@@ -128,3 +128,30 @@ def test_video_blob_track(cache, tmp_path):
     assert removed == str(p)
     assert cache.get_video_blob("webm") is None
     assert cache.delete_video_blob("webm") is None  # idempotent
+
+
+def test_rotation_video_blob_track(cache, tmp_path):
+    # Per-id rotation blobs are keyed by (video_id, kind) and are independent of
+    # both each other and the single designated background (video_blobs).
+    pw = tmp_path / "rot-7-webm.bin"; pw.write_bytes(b"w7")
+    pm = tmp_path / "rot-7-mp4.bin"; pm.write_bytes(b"m7")
+    cache.record_rotation_video_blob(7, "webm", str(pw), '"w7"', "t0")
+    cache.record_rotation_video_blob(7, "mp4", str(pm), '"m7"', "t0")
+    cache.record_rotation_video_blob(9, "webm", str(tmp_path / "rot-9-webm.bin"), '"w9"', "t0")
+    assert cache.get_rotation_video_blob(7, "webm")["etag"] == '"w7"'
+    # a bare designated blob with the same kind is a different row entirely
+    cache.record_video_blob("webm", str(tmp_path / "webm.bin"), '"desig"', "t0")
+    assert cache.get_rotation_video_blob(7, "webm")["etag"] == '"w7"'
+    assert len(cache.list_rotation_video_blobs()) == 3
+    # upsert replaces etag for one (video_id, kind)
+    cache.record_rotation_video_blob(7, "webm", str(pw), '"w7b"', "t1")
+    assert cache.get_rotation_video_blob(7, "webm")["etag"] == '"w7b"'
+    # delete one part
+    assert cache.delete_rotation_video_blob(7, "mp4") == str(pm)
+    assert cache.get_rotation_video_blob(7, "mp4") is None
+    # delete a whole video (all kinds) returns every file_path
+    paths = cache.delete_rotation_video(7)
+    assert set(paths) == {str(pw)}            # mp4 already gone; webm remains
+    assert cache.get_rotation_video_blob(7, "webm") is None
+    assert cache.get_rotation_video_blob(9, "webm") is not None  # untouched
+    assert cache.delete_rotation_video(7) == []  # idempotent
