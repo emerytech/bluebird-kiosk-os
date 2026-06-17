@@ -35,6 +35,12 @@ _DEFAULTS: Dict[str, str] = {
     "DEVICE_ID": "",
     "ADMIN_PORT": "7311",
     "HEARTBEAT_INTERVAL_SEC": "60",
+    # Beacon signage (fleet delivery). DISPLAY_MODE is "legacy_wall" (default) or
+    # "signage"; SIGNAGE_URL is the bound Beacon display's cloud URL. Both are
+    # written by the heartbeat from the backend's `display_assignment` and read by
+    # launch-kiosk-chromium. An unbound kiosk stays in legacy_wall mode untouched.
+    "DISPLAY_MODE": "legacy_wall",
+    "SIGNAGE_URL": "",
 }
 
 
@@ -111,6 +117,22 @@ def derive_legacy_wall_url(backend: str, slug: str) -> str:
     if not backend or not slug:
         return ""
     return f"{backend}/{slug}/legacy-wall"
+
+
+def derive_beacon_url(backend: str, slug: str, public_key: str) -> str:
+    """Return the cloud URL a kiosk loads when bound to a Beacon signage display:
+    GET <backend>/<slug>/beacon/d/<public_key> — a fullscreen 16:9 page.
+
+    Like the Legacy Wall URL, it is a normal cloud-rendered page; the launcher
+    appends ?kiosk_cache=1 to it, which (a) enables the bundled local image cache
+    and (b) — critically — arms the emergency-takeover poller embedded in the
+    page. Returns "" if any part is missing so the caller can fall back."""
+    backend = (backend or "").rstrip("/")
+    slug = (slug or "").strip("/")
+    public_key = (public_key or "").strip("/")
+    if not backend or not slug or not public_key:
+        return ""
+    return f"{backend}/{slug}/beacon/d/{public_key}"
 
 
 def get_admin_pin_hash() -> Optional[bytes]:

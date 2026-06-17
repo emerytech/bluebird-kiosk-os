@@ -25,6 +25,11 @@ CLOUD_URL=""
 # kiosk.conf may override ADMIN_PORT — recompute the local URL after sourcing.
 LOCAL_URL="http://127.0.0.1:${ADMIN_PORT}/legacy-wall"
 CLOUD_URL="${LEGACY_WALL_URL:-}"
+# Beacon signage: when the heartbeat has bound this device to a Beacon display it
+# writes DISPLAY_MODE=signage + SIGNAGE_URL into kiosk.conf (sourced above). An
+# unbound kiosk leaves DISPLAY_MODE=legacy_wall and these are inert.
+DISPLAY_MODE="${DISPLAY_MODE:-legacy_wall}"
+SIGNAGE_URL="${SIGNAGE_URL:-}"
 
 # Wait for the local admin server first — needed either way (local
 # renderer + diagnostic console). Without this wait, Chromium can fire
@@ -44,11 +49,16 @@ except Exception:
   sleep 1
 done
 
-# Probe the cloud URL with a short timeout. If reachable, use it for
-# visual parity. If not (DNS failure, WAN down, cert error, etc.), fall
-# back to the local renderer.
+# URL selection. Beacon signage (a kiosk bound to a Beacon display) takes
+# precedence: commit to the cloud signage URL — there is no local signage
+# renderer yet, so if WAN is down Chromium simply retries and the page loads
+# when it returns. Otherwise probe the Legacy Wall cloud URL and, if reachable,
+# use it for visual parity; else fall back to the local renderer. The operator
+# KIOSK_URL override (below) still wins over both.
 URL="$LOCAL_URL"
-if [[ -n "$CLOUD_URL" ]]; then
+if [[ "$DISPLAY_MODE" == "signage" && -n "$SIGNAGE_URL" ]]; then
+  URL="$SIGNAGE_URL"
+elif [[ -n "$CLOUD_URL" ]]; then
   # Use a real-browser UA — Cloudflare/modsecurity in front of the
   # backend returns 403 to bare `Python-urllib/X.Y` requests, which
   # would mis-classify a healthy cloud as unreachable.
@@ -86,7 +96,13 @@ fi
 # (returns 403 before our origin even sees the request). The kiosk's
 # local server is always at 127.0.0.1:7311 anyway, so the shim
 # hardcodes that target — no need to thread the value through.
-if [[ "$URL" == "$CLOUD_URL" && "$URL" != *"kiosk_cache=1"* ]]; then
+# Append for ANY cloud target — the Legacy Wall (CLOUD_URL) OR a Beacon signage
+# display (SIGNAGE_URL). Besides the local image cache, kiosk_cache=1 is what ARMS
+# the emergency-takeover poller embedded in the page; gating on ==CLOUD_URL alone
+# left the takeover silently dead on a signage display (Beacon §13-C1).
+if { { [[ -n "$CLOUD_URL" ]] && [[ "$URL" == "$CLOUD_URL" ]]; } \
+     || { [[ -n "$SIGNAGE_URL" ]] && [[ "$URL" == "$SIGNAGE_URL" ]]; }; } \
+   && [[ "$URL" != *"kiosk_cache=1"* ]]; then
   if [[ "$URL" == *\?* ]]; then
     URL="${URL}&kiosk_cache=1"
   else

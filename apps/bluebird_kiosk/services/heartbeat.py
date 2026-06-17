@@ -329,6 +329,39 @@ def _read_display_scheduled_off() -> bool:
         return False
 
 
+def _apply_display_assignment(assignment: Any) -> None:
+    """Translate a Beacon `display_assignment` (bearer heartbeats only) into
+    kiosk.conf so launch-kiosk-chromium picks the right URL on its next start:
+      • {mode:'signage', slug, public_key} -> DISPLAY_MODE=signage + SIGNAGE_URL
+      • null / non-signage              -> DISPLAY_MODE=legacy_wall (revert)
+
+    Only when the effective mode OR url CHANGES do we rewrite the config and queue
+    a kiosk restart so Chromium reloads onto the new target — we do NOT hot-swap a
+    live URL, and we must NOT restart on every heartbeat. Best-effort: any failure
+    is logged and never breaks the heartbeat or the emergency loopback."""
+    try:
+        cfg = config.read_config()
+        backend = cfg.get("BLUEBIRD_BACKEND") or ""
+        cur_mode = cfg.get("DISPLAY_MODE") or "legacy_wall"
+        cur_url = cfg.get("SIGNAGE_URL") or ""
+        if isinstance(assignment, dict) and str(assignment.get("mode") or "") == "signage":
+            new_url = config.derive_beacon_url(
+                backend, str(assignment.get("slug") or ""), str(assignment.get("public_key") or ""))
+            new_mode = "signage" if new_url else "legacy_wall"
+        else:
+            new_url = ""
+            new_mode = "legacy_wall"
+        if new_mode == cur_mode and new_url == cur_url:
+            return  # no change — never churn the config or restart
+        config.write_config({"DISPLAY_MODE": new_mode, "SIGNAGE_URL": new_url})
+        logger.info(
+            "heartbeat: display mode %s -> %s (url=%s) — restarting kiosk",
+            cur_mode, new_mode, new_url or "(none)")
+        _cmd_restart_kiosk()
+    except Exception as exc:  # noqa: BLE001 — heartbeat must survive any failure here
+        logger.warning("heartbeat: could not apply display assignment: %s", exc)
+
+
 def send_once() -> bool:
     cfg = config.read_config()
     backend = cfg.get("BLUEBIRD_BACKEND") or ""
@@ -380,6 +413,12 @@ def send_once() -> bool:
         commands = data.get("commands") or [] if isinstance(data, dict) else []
         if commands:
             _execute_commands(commands, backend, token)
+    # Beacon display assignment — bearer heartbeats only (a slug-only v1 heartbeat
+    # always carries a null assignment, which would wrongly revert a signage kiosk
+    # to Legacy Wall, so we never act on it). Only when the backend actually sent
+    # the key, so an older backend that omits it never clobbers the local mode.
+    if token and isinstance(data, dict) and "display_assignment" in data:
+        _apply_display_assignment(data.get("display_assignment"))
     return True
 
 
