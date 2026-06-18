@@ -4,6 +4,10 @@ Most recent first. These notes are shown in the admin overlay before you apply a
 kiosk update, so an operator can see what an update will install before confirming.
 
 ## 2026-06-17
+- **Touch WiFi fix:** connecting to WiFi from the admin overlay now shows the
+  on-screen keyboard when you tap the password field — both for a network you
+  pick from the list and for "Join hidden network." Previously no keyboard
+  appeared, so a touch-only kiosk couldn't join a password-protected network.
 - **Digital signage (Beacon):** a kiosk can now be assigned a BlueBird Beacon
   signage display from the admin console. When assigned it switches to showing
   that display; the full-screen emergency takeover still appears during an alert,
