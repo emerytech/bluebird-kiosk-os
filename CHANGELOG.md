@@ -4,6 +4,11 @@ Most recent first. These notes are shown in the admin overlay before you apply a
 kiosk update, so an operator can see what an update will install before confirming.
 
 ## 2026-06-18
+- **Offline admin access:** if a kiosk boots with no network it shows the cached
+  slideshow — now you can reach the admin panel to join WiFi by **tapping the
+  top-left corner 5 times** (opens the PIN screen). Previously the only way in was
+  an undiscoverable 5-finger hold, so a kiosk at a new location couldn't get
+  online. (The 5-finger hold still works too.)
 - **Signage / power-schedule fix:** the heartbeat service could not save settings
   pushed from the console — assigning a kiosk to a Beacon display did nothing, and
   the power on/off schedule was never cached locally. The service was sandboxed

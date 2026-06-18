@@ -152,6 +152,19 @@ def test_legacy_wall_home_renders(client):
     assert "/static/legacy_wall.css" in body
 
 
+def test_offline_page_has_corner_tap_admin_entry(client):
+    # A touch-only kiosk that boots offline shows this local slideshow; it must
+    # offer a way to reach the PIN-gated admin (to join a new venue's WiFi).
+    # Tap the top-left corner 5x -> navigate to /admin. Must NOT use open-overlay
+    # (that skips the PIN); navigating to /admin keeps the PIN gate.
+    c, _, _ = client
+    body = c.get("/legacy-wall").text
+    assert 'id="lw-admin-hotspot"' in body
+    assert 'window.location.href="/admin"' in body
+    assert "taps>=5" in body
+    assert "open-overlay" not in body   # never PIN-skip from the public slideshow
+
+
 def test_legacy_wall_api_media(client):
     c, _, _ = client
     resp = c.get("/legacy-wall/api/media")
