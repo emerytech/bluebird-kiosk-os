@@ -8,6 +8,8 @@ kiosk update, so an operator can see what an update will install before confirmi
   on-screen keyboard when you tap the password field — both for a network you
   pick from the list and for "Join hidden network." Previously no keyboard
   appeared, so a touch-only kiosk couldn't join a password-protected network.
+- **Touch admin fix:** "Change school slug" and "Change PIN" now use an on-screen
+  keyboard too (they previously relied on a popup that a touch-only kiosk blocks).
 - **Digital signage (Beacon):** a kiosk can now be assigned a BlueBird Beacon
   signage display from the admin console. When assigned it switches to showing
   that display; the full-screen emergency takeover still appears during an alert,

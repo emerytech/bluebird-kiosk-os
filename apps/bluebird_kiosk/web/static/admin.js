@@ -410,8 +410,67 @@ async function returnToKiosk() {
   }
 }
 
+// Generic single-field text prompt via the in-page #text-modal (native prompt()
+// is blocked under Chromium --kiosk). The input's data-osk mode is set per call
+// so osk.js pops the right on-screen keyboard. Resolves the trimmed value, or
+// null on cancel. opts.validate(v) returns an error string (block) or null (ok).
+function askText(opts) {
+  return new Promise((resolve) => {
+    const modal = document.getElementById('text-modal');
+    const titleEl = document.getElementById('text-modal-title');
+    const labelEl = document.getElementById('text-modal-label');
+    const input = document.getElementById('text-modal-input');
+    const hint = document.getElementById('text-modal-hint');
+    const btnOk = document.getElementById('btn-text-ok');
+    const btnCancel = document.getElementById('btn-text-cancel');
+
+    titleEl.textContent = opts.title || 'Edit';
+    labelEl.textContent = opts.label || '';
+    input.type = opts.type || 'text';
+    input.value = opts.value || '';
+    input.placeholder = opts.placeholder || '';
+    input.maxLength = opts.maxLength || 128;
+    if (opts.inputmode) input.setAttribute('inputmode', opts.inputmode);
+    else input.removeAttribute('inputmode');
+    input.dataset.osk = opts.oskMode || 'qwerty';
+    hint.textContent = '';
+    modal.style.display = 'flex';
+    // Defer focus so the OSK observer has a chance to (re)read data-osk.
+    setTimeout(() => { input.focus(); }, 30);
+
+    function cleanup() {
+      modal.style.display = 'none';
+      btnOk.removeEventListener('click', onOk);
+      btnCancel.removeEventListener('click', onCancel);
+      input.removeEventListener('keydown', onKey);
+    }
+    function onOk() {
+      const v = input.value.trim();
+      const err = opts.validate ? opts.validate(v) : (v ? null : 'Required.');
+      if (err) { hint.textContent = err; return; }
+      cleanup();
+      resolve(v);
+    }
+    function onCancel() { cleanup(); resolve(null); }
+    function onKey(e) {
+      if (e.key === 'Enter') { e.preventDefault(); onOk(); }
+      else if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+    }
+
+    btnOk.addEventListener('click', onOk);
+    btnCancel.addEventListener('click', onCancel);
+    input.addEventListener('keydown', onKey);
+  });
+}
+
 async function changeSlug() {
-  const slug = prompt('New school slug:');
+  const slug = await askText({
+    title: 'Change school slug',
+    label: 'New school slug',
+    placeholder: 'e.g. northeast-nodaway',
+    oskMode: 'qwerty',
+    maxLength: 64,
+  });
   if (!slug) return;
   const r = await api('/admin/kiosk/slug', {
     method: 'POST',
@@ -442,7 +501,15 @@ async function loadLogs() {
 }
 
 async function changePin() {
-  const newPin = prompt('New 6-digit PIN:');
+  const newPin = await askText({
+    title: 'Change admin PIN',
+    label: 'New 6-digit PIN',
+    placeholder: '6 digits',
+    oskMode: 'alphanum',     // digits are the top row of this layout
+    inputmode: 'numeric',
+    maxLength: 6,
+    validate: (v) => (/^\d{6}$/.test(v) ? null : 'Enter exactly 6 digits.'),
+  });
   if (!newPin) return;
   const r = await api('/admin/system/change-pin', {
     method: 'POST',
