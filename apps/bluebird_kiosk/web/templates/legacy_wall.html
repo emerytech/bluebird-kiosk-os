@@ -33,6 +33,28 @@
     </div>
   </div>
 
+  <!-- Offline admin entry. A touch-only kiosk that boots with NO network shows
+       this local slideshow and otherwise has no on-screen way to reach the admin
+       panel (the 5-finger-hold gesture is undiscoverable). Tap the TOP-LEFT
+       corner 5x within 3s to open /admin (the PIN screen — same-origin, fully
+       local, works offline) so you can join a new venue's WiFi. The admin page
+       enforces the PIN; this only navigates there, it does NOT bypass it. -->
+  <div id="lw-admin-hotspot"
+       style="position:fixed;top:0;left:0;width:96px;height:96px;z-index:99999;background:transparent;"></div>
+  <script>
+  (function(){
+    var hot=document.getElementById("lw-admin-hotspot");
+    if(!hot) return;
+    var taps=0, timer=null;
+    function reset(){ taps=0; if(timer){clearTimeout(timer);timer=null;} }
+    hot.addEventListener("click", function(){
+      taps++;
+      if(timer) clearTimeout(timer);
+      timer=setTimeout(reset, 3000);
+      if(taps>=5){ reset(); window.location.href="/admin"; }
+    });
+  })();
+  </script>
   <script src="/static/legacy_wall.js"></script>
 </body>
 </html>
