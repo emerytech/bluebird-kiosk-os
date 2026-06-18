@@ -61,9 +61,11 @@
             <div style="margin-top:12px;display:flex;flex-direction:column;gap:8px;">
               <label>SSID</label>
               <input id="hidden-ssid" type="text" autocomplete="off"
+                     data-osk="alphanum"
                      placeholder="Network name" inputmode="text">
               <label>Password</label>
               <input id="hidden-pass" type="password" autocomplete="off"
+                     data-osk="qwerty"
                      placeholder="Leave blank for open networks">
               <button id="btn-hidden-connect" style="margin-top:6px">Connect</button>
             </div>
@@ -188,8 +190,32 @@
     </section>
 
     <div id="toast" class="toast"></div>
+
+    <!-- WiFi password modal (replaces native prompt() which Chromium --kiosk
+         blocks). Sits hidden until connectWifi() shows it. The password input
+         carries data-osk so the on-screen keyboard pops up on touch. -->
+    <div id="wifi-modal" class="modal-back" style="display:none;">
+      <div class="modal-card">
+        <h2 id="wifi-modal-title">Connect to network</h2>
+        <p class="modal-sub" id="wifi-modal-sub"></p>
+        <label for="wifi-password-input" style="display:block;font-size:12px;color:var(--bb-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Password</label>
+        <input id="wifi-password-input" class="big-input" type="password"
+               data-osk="qwerty"
+               autocomplete="off" autocapitalize="none" spellcheck="false"
+               placeholder="WiFi password">
+        <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:14px;color:var(--bb-muted);">
+          <input type="checkbox" id="wifi-password-show"> Show password
+        </label>
+        <p class="hint" id="wifi-modal-hint"></p>
+        <footer class="modal-actions">
+          <button id="btn-wifi-cancel" class="ghost">Cancel</button>
+          <button id="btn-wifi-connect" class="primary">Connect</button>
+        </footer>
+      </div>
+    </div>
   </div>
 
+  <script src="/static/osk.js"></script>
   <script src="/static/admin.js"></script>
 </body>
 </html>

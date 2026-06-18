@@ -164,6 +164,56 @@ function setTab(name) {
 // Old login() / btn-login / login-pin removed — the shuffled keypad
 // auto-submits via pinAutoSubmit() above.
 
+// Touch-friendly WiFi password entry. Mirrors firstboot.js's askWifiPassword:
+// an in-page modal (native prompt() is blocked under Chromium --kiosk) whose
+// input carries data-osk so osk.js pops the on-screen keyboard on focus.
+// Resolves to the password string, or null if the operator cancels.
+function askWifiPassword(network) {
+  return new Promise((resolve) => {
+    const modal = document.getElementById('wifi-modal');
+    const input = document.getElementById('wifi-password-input');
+    const show = document.getElementById('wifi-password-show');
+    const sub = document.getElementById('wifi-modal-sub');
+    const hint = document.getElementById('wifi-modal-hint');
+    const btnOk = document.getElementById('btn-wifi-connect');
+    const btnCancel = document.getElementById('btn-wifi-cancel');
+
+    input.value = '';
+    input.type = 'password';
+    show.checked = false;
+    hint.textContent = '';
+    sub.textContent = `Network: ${network.ssid}`;
+    modal.style.display = 'flex';
+    // Defer focus so the OSK observer has a chance to bind the input.
+    setTimeout(() => { input.focus(); }, 30);
+
+    function cleanup() {
+      modal.style.display = 'none';
+      btnOk.removeEventListener('click', onOk);
+      btnCancel.removeEventListener('click', onCancel);
+      show.removeEventListener('change', onShow);
+      input.removeEventListener('keydown', onKey);
+    }
+    function onOk() {
+      const v = input.value;
+      if (!v) { hint.textContent = 'Password is required.'; return; }
+      cleanup();
+      resolve(v);
+    }
+    function onCancel() { cleanup(); resolve(null); }
+    function onShow() { input.type = show.checked ? 'text' : 'password'; }
+    function onKey(e) {
+      if (e.key === 'Enter') { e.preventDefault(); onOk(); }
+      else if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+    }
+
+    btnOk.addEventListener('click', onOk);
+    btnCancel.addEventListener('click', onCancel);
+    show.addEventListener('change', onShow);
+    input.addEventListener('keydown', onKey);
+  });
+}
+
 async function loadNetwork() {
   const list = document.getElementById('net-list');
   list.innerHTML = 'Scanning…';
@@ -200,7 +250,14 @@ async function loadNetwork() {
     row.querySelector('.meta').textContent =
       `${n.signal}% · ${n.security || 'open'}${n.in_use ? ' · connected' : ''}`;
     row.querySelector('button').addEventListener('click', async () => {
-      const password = n.security ? prompt(`Password for ${n.ssid}:`) || '' : '';
+      // Secured network: ask via the in-page modal (native prompt() is blocked
+      // by Chromium --kiosk, and only the modal's input gets the on-screen
+      // keyboard via data-osk). Open networks connect with no password.
+      let password = '';
+      if (n.security) {
+        password = await askWifiPassword(n);
+        if (password === null) return;   // operator cancelled
+      }
       const resp = await api('/admin/network/connect', {
         method: 'POST',
         body: JSON.stringify({ ssid: n.ssid, password }),
