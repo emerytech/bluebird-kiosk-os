@@ -4,6 +4,10 @@ Most recent first. These notes are shown in the admin overlay before you apply a
 kiosk update, so an operator can see what an update will install before confirming.
 
 ## 2026-06-18
+- **Forget a WiFi network:** the admin overlay's Network tab now has a **Saved
+  networks** list — tap **Forget** (then tap again to confirm) to remove a network
+  the kiosk remembers, so it stops auto-reconnecting to a wrong or old one. (No
+  action needed; applies on update.)
 - **Offline admin access:** if a kiosk boots with no network it shows the cached
   slideshow — now you can reach the admin panel to join WiFi by **tapping the
   top-left corner 5 times** (opens the PIN screen). Previously the only way in was
