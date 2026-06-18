@@ -3,6 +3,13 @@
 Most recent first. These notes are shown in the admin overlay before you apply a
 kiosk update, so an operator can see what an update will install before confirming.
 
+## 2026-06-18
+- **Signage / power-schedule fix:** the heartbeat service could not save settings
+  pushed from the console — assigning a kiosk to a Beacon display did nothing, and
+  the power on/off schedule was never cached locally. The service was sandboxed
+  away from its own config files; it can now write them again. (No action needed;
+  applies on update.)
+
 ## 2026-06-17
 - **Touch WiFi fix:** connecting to WiFi from the admin overlay now shows the
   on-screen keyboard when you tap the password field — both for a network you

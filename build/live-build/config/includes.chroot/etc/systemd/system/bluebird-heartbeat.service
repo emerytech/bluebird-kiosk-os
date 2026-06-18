@@ -15,6 +15,13 @@ Restart=always
 RestartSec=10
 NoNewPrivileges=yes
 ProtectSystem=strict
+# The heartbeat persists control-plane state to disk: the Beacon display
+# assignment (DISPLAY_MODE/SIGNAGE_URL in kiosk.conf) and the cached power
+# schedule (under /var/lib/bluebird-kiosk). Under ProtectSystem=strict those
+# trees are read-only in the unit's namespace, so without this both writes
+# fail with EROFS — silently breaking Beacon signage AND power scheduling.
+# Mirrors bluebird-admin.service / bluebird-kiosk-sync.service.
+ReadWritePaths=/etc/bluebird /var/lib/bluebird-kiosk
 ProtectHome=yes
 PrivateTmp=yes
 
