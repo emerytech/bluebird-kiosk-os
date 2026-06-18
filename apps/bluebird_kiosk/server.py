@@ -66,6 +66,12 @@ class WifiConnectBody(BaseModel):
     password: Optional[str] = Field(default=None, max_length=128)
 
 
+class WifiForgetBody(BaseModel):
+    # `ssid` here is the saved connection's NAME (NetworkManager profile id),
+    # which for kiosk-joined networks equals the SSID.
+    ssid: str = Field(..., min_length=1, max_length=64)
+
+
 class SlugBody(BaseModel):
     slug: str = Field(..., min_length=1, max_length=64)
 
@@ -599,12 +605,20 @@ def create_app() -> FastAPI:
                     }
                     for n in nmcli_wrapper.list_networks()
                 ],
+                # Saved profiles the kiosk auto-joins (may be out of range, so not
+                # necessarily in `networks`). Each can be removed via /forget.
+                "saved": nmcli_wrapper.saved_networks(),
             }
         )
 
     @app.post("/admin/network/connect", dependencies=[Depends(require_admin)])
     async def admin_network_connect(body: WifiConnectBody):
         ok, msg = nmcli_wrapper.connect(body.ssid, body.password)
+        return JSONResponse({"ok": ok, "message": msg})
+
+    @app.post("/admin/network/forget", dependencies=[Depends(require_admin)])
+    async def admin_network_forget(body: WifiForgetBody):
+        ok, msg = nmcli_wrapper.forget(body.ssid)
         return JSONResponse({"ok": ok, "message": msg})
 
     # Display

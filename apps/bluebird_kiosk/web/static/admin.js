@@ -227,6 +227,7 @@ async function loadNetwork() {
   const s = r.status || {};
   document.getElementById('net-status').textContent =
     `Ethernet: ${s.ethernet || '—'}   WiFi: ${s.wifi || '—'}   IP: ${s.ip || '—'}`;
+  renderSaved(Array.isArray(r.saved) ? r.saved : []);
   list.innerHTML = '';
   const nets = Array.isArray(r.networks) ? r.networks : [];
   if (nets.length === 0) {
@@ -285,6 +286,55 @@ async function connectHiddenNetwork() {
     document.getElementById('hidden-ssid').value = '';
     document.getElementById('hidden-pass').value = '';
     loadNetwork();
+  }
+}
+
+// Saved networks the kiosk remembers + auto-joins. Each has a Forget button that
+// deletes the NetworkManager profile (POST /admin/network/forget). A two-tap
+// confirm guards the destructive delete — native confirm() is blocked under
+// Chromium --kiosk, so the first tap arms (inline styles, no dependency on a
+// CSS class) and a second tap within 4s forgets.
+function renderSaved(saved) {
+  const box = document.getElementById('saved-list');
+  if (!box) return;
+  box.innerHTML = '';
+  if (!saved.length) {
+    box.innerHTML = '<div class="meta">None saved.</div>';
+    return;
+  }
+  for (const name of saved) {
+    const row = document.createElement('div');
+    row.className = 'wifi-row';
+    row.innerHTML = '<div><div class="ssid"></div></div><button class="secondary">Forget</button>';
+    row.querySelector('.ssid').textContent = name;
+    const btn = row.querySelector('button');
+    let armed = false;
+    let timer = null;
+    function disarm() {
+      armed = false;
+      btn.textContent = 'Forget';
+      btn.style.background = '';
+      btn.style.color = '';
+    }
+    btn.addEventListener('click', async () => {
+      if (!armed) {
+        armed = true;
+        btn.textContent = 'Tap to confirm';
+        btn.style.background = '#7f1d1d';
+        btn.style.color = '#fff';
+        timer = setTimeout(disarm, 4000);
+        return;
+      }
+      clearTimeout(timer);
+      btn.disabled = true;
+      const resp = await api('/admin/network/forget', {
+        method: 'POST',
+        body: JSON.stringify({ ssid: name }),
+      }).then((r) => r.json());
+      toast(resp.message || (resp.ok ? 'Forgotten' : 'Failed'), resp.ok ? 'success' : 'error');
+      loadNetwork();
+    });
+    box.appendChild(row);
   }
 }
 

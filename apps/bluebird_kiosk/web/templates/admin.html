@@ -56,7 +56,13 @@
           <p id="net-status" class="meta" style="margin-top:12px"></p>
           <div class="wifi-list" id="net-list">Scanning…</div>
 
-          <details style="margin-top:18px;border-top:1px solid var(--bb-border);padding-top:14px;">
+          <details style="margin-top:14px;border-top:1px solid var(--bb-border);padding-top:14px;">
+            <summary style="cursor:pointer;font-weight:600;">Saved networks</summary>
+            <p class="meta" style="margin-top:8px;">Networks this kiosk remembers and auto-joins. Forget one to stop it reconnecting.</p>
+            <div class="wifi-list" id="saved-list" style="margin-top:8px;">None saved.</div>
+          </details>
+
+          <details style="margin-top:14px;border-top:1px solid var(--bb-border);padding-top:14px;">
             <summary style="cursor:pointer;font-weight:600;">Join hidden network</summary>
             <div style="margin-top:12px;display:flex;flex-direction:column;gap:8px;">
               <label>SSID</label>

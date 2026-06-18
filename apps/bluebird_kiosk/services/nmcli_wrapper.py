@@ -81,6 +81,69 @@ def connect(ssid: str, password: Optional[str] = None) -> tuple[bool, str]:
     return False, (result.stderr.strip() or result.stdout.strip() or "Unknown error.")
 
 
+def saved_networks() -> List[str]:
+    """Names of saved WiFi connection profiles (NetworkManager 'connections').
+
+    These are the networks the kiosk will auto-join when in range — distinct from
+    the live scan (`list_networks`), since a saved network may be out of range.
+    `forget()` removes one. TYPE is the first --terse field so we can split on the
+    first ':' and keep a name that itself contains ':' intact.
+    """
+    try:
+        result = subprocess.run(
+            [
+                NMCLI,
+                "--terse",
+                "--escape", "no",
+                "--fields", "TYPE,NAME",
+                "connection", "show",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return []
+    names: List[str] = []
+    seen: set = set()
+    for line in result.stdout.splitlines():
+        if ":" not in line:
+            continue
+        ctype, name = line.split(":", 1)
+        if ctype.strip() != "802-11-wireless":
+            continue
+        name = name.strip()
+        if name and name not in seen:
+            seen.add(name)
+            names.append(name)
+    names.sort(key=str.lower)
+    return names
+
+
+def forget(name: str) -> tuple[bool, str]:
+    """Delete a saved WiFi connection profile so the kiosk stops auto-joining it.
+
+    `name` is passed as an explicit argv element (no shell), so an operator-chosen
+    SSID can't inject. Deleting the active connection disconnects it — that's the
+    operator's intent when switching networks. Returns (ok, message)."""
+    if not name:
+        return False, "Network name is required."
+    try:
+        result = subprocess.run(
+            [NMCLI, "connection", "delete", "id", name],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        return False, f"nmcli failed: {exc}"
+    if result.returncode == 0:
+        return True, result.stdout.strip() or "Network forgotten."
+    return False, (result.stderr.strip() or result.stdout.strip() or "Unknown error.")
+
+
 def current_status() -> dict:
     """Return a summary of the current connection — for display in admin UI.
 
