@@ -1,25 +1,31 @@
-"""5-finger long-press detector for BlueBird Kiosk OS.
+"""Touch admin-gesture daemon for BlueBird Kiosk OS.
 
-Watches every touchscreen `/dev/input/event*` device via python-evdev. When
-≥5 simultaneous touch slots are active for ≥2 seconds, signals the admin
-overlay by spawning a Chromium window pointed at http://127.0.0.1:7311/admin.
+Watches every touchscreen `/dev/input/event*` device via python-evdev and opens the
+PIN-gated admin overlay on either of two gestures:
+- **5-finger long-press** (>=5 slots for >=2s) — the original; needs a panel that reports
+  5 simultaneous touches.
+- **corner-tap** (tap any screen corner 5x within 4s) — reliable on any panel, including
+  2-touch panels, and rotation-agnostic.
 
-Why this design:
-- libinput's high-level gesture API is targeted at touchpads, not touchscreens.
-  Direct multi-touch slot tracking via evdev is more portable across panels.
-- A single hold gesture, no swipe / corner-tap, is the simplest possible
-  affordance for non-technical staff and impossible to discover by accident.
+Launch path: this daemon is a sandboxed system service with no Wayland session, and the kiosk
+chromium runs fullscreen (sway hides every other window behind it). So we DON'T spawn chromium
+ourselves — we ask the running sway to exec the shared `launch-admin-overlay` script, which
+unfullscreens the kiosk first and starts chromium with the right flags (identical to the
+Ctrl+Alt+B keybinding). Reaching sway's IPC socket needs /run/user visible — hence the unit
+drops ProtectHome.
 """
 from __future__ import annotations
 
+import glob
 import json
 import logging
 import os
+import pwd
 import select
 import subprocess
 import time
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
 
 import evdev
 from evdev import ecodes
@@ -29,6 +35,17 @@ HOLD_FINGERS = 5
 HOLD_SECONDS = 2.0
 COOLDOWN_SECONDS = 5.0
 ADMIN_URL = os.environ.get("BLUEBIRD_ADMIN_URL", "http://127.0.0.1:7311/admin")
+KIOSK_USER = "bluebird-kiosk"
+OVERLAY_LAUNCHER = "/opt/bluebird-kiosk/bin/launch-admin-overlay"
+
+# Corner-tap admin gesture — reliable on ANY panel, unlike the 5-finger hold (which needs a
+# panel that reports 5 simultaneous touches and is awkward to perform). Tap any screen corner
+# CORNER_TAPS times within CORNER_WINDOW seconds. "Any corner" keeps it rotation-agnostic
+# (rotating the display just permutes which physical corner is which). CORNER_FRAC = how close
+# to a corner (fraction of each axis) still counts.
+CORNER_TAPS = 5
+CORNER_WINDOW = 4.0
+CORNER_FRAC = 0.15
 
 # Touch-to-wake: a tap while the panel is asleep on schedule grants a temporary reprieve.
 # We record an override the power scheduler honors, and (when the panel is dark) kick the
@@ -77,6 +94,42 @@ def _wake_on_touch() -> None:
         logger.info("touch-to-wake: armed %ds + triggered wake", WAKE_SECONDS)
 
 
+def _sway_socket() -> "str | None":
+    """The kiosk user's sway IPC socket. This daemon runs as root, so we look up the kiosk
+    user's uid (not our own); root can connect to that socket directly — no sudo needed."""
+    try:
+        uid = pwd.getpwnam(KIOSK_USER).pw_uid
+    except KeyError:
+        return None
+    socks = sorted(glob.glob("/run/user/%d/sway-ipc.%d.*.sock" % (uid, uid)))
+    return socks[0] if socks else None
+
+
+def _is_corner(x, y, xmax, ymax, frac: float = CORNER_FRAC) -> bool:
+    """True if (x, y) is within `frac` of ANY of the four corners. Any-corner so a rotated
+    display still works. False on unknown ranges/coords (so it never fires by accident)."""
+    if not xmax or not ymax or x is None or y is None:
+        return False
+    nx, ny = x / xmax, y / ymax
+    return (nx < frac or nx > 1 - frac) and (ny < frac or ny > 1 - frac)
+
+
+def _xy_range(dev) -> Tuple[int, int]:
+    """(x_max, y_max) for a touch device, preferring the multitouch axes. (0, 0) if unknown —
+    which disables corner detection for that device (the 5-finger gesture still works)."""
+    caps = dict(dev.capabilities().get(ecodes.EV_ABS, []))
+
+    def _max(*codes):
+        for c in codes:
+            info = caps.get(c)
+            if info is not None and getattr(info, "max", 0):
+                return info.max
+        return 0
+
+    return (_max(ecodes.ABS_MT_POSITION_X, ecodes.ABS_X),
+            _max(ecodes.ABS_MT_POSITION_Y, ecodes.ABS_Y))
+
+
 def _is_touchscreen(dev: evdev.InputDevice) -> bool:
     caps = dev.capabilities()
     abs_caps = caps.get(ecodes.EV_ABS, [])
@@ -98,35 +151,39 @@ def _open_touchscreens() -> list:
 
 
 def _spawn_admin_overlay() -> None:
-    logger.info("gesture: launching admin overlay")
+    """Open the PIN-gated admin overlay. We don't spawn chromium directly — this daemon has no
+    Wayland session and the kiosk chromium is fullscreen (a directly-spawned window opens HIDDEN
+    behind it; that's the long-standing reason the 5-finger gesture "did nothing"). Instead we
+    tell the running sway to exec the shared launcher, which unfullscreens the kiosk first and
+    starts chromium correctly — exactly what Ctrl+Alt+B does."""
+    sock = _sway_socket()
+    if not sock:
+        logger.warning("admin overlay: no sway socket found — session not up yet?")
+        return
+    logger.info("admin overlay: launching via sway exec")
     try:
-        subprocess.Popen(
-            [
-                "/usr/bin/chromium",
-                "--app=" + ADMIN_URL,
-                "--no-first-run",
-                "--noerrdialogs",
-                "--password-store=basic",
-                "--user-data-dir=/var/lib/bluebird-kiosk/admin-chromium",
-                "--window-size=800,1000",
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+        subprocess.run(
+            ["/usr/bin/swaymsg", "-s", sock, "exec", OVERLAY_LAUNCHER],
+            check=False, capture_output=True, timeout=10,
         )
-    except FileNotFoundError as exc:
+    except (OSError, subprocess.TimeoutExpired) as exc:
         logger.warning("admin overlay launch failed: %s", exc)
 
 
 def watch(devices: list) -> None:
     slots: Dict[int, Dict[int, bool]] = {dev.fd: {} for dev in devices}
     current_slot: Dict[int, int] = {dev.fd: 0 for dev in devices}
+    pos: Dict[int, Dict[int, list]] = {dev.fd: {} for dev in devices}   # slot -> [x, y]
+    ranges = {dev.fd: _xy_range(dev) for dev in devices}
     held_since: float | None = None
     last_trigger = 0.0
     last_wake = 0.0
+    corner_taps: List[float] = []
 
     while True:
         r, _, _ = select.select([dev.fd for dev in devices], [], [], 0.25)
         touch_down = False
+        lifts: List[Tuple[int, list]] = []        # (fd, [x, y]) for fingers lifted this batch
         for dev in devices:
             if dev.fd in r:
                 try:
@@ -135,10 +192,18 @@ def watch(devices: list) -> None:
                             continue
                         if event.code == ecodes.ABS_MT_SLOT:
                             current_slot[dev.fd] = event.value
+                        elif event.code == ecodes.ABS_MT_POSITION_X:
+                            pos[dev.fd].setdefault(current_slot[dev.fd], [None, None])[0] = event.value
+                        elif event.code == ecodes.ABS_MT_POSITION_Y:
+                            pos[dev.fd].setdefault(current_slot[dev.fd], [None, None])[1] = event.value
                         elif event.code == ecodes.ABS_MT_TRACKING_ID:
                             slot = current_slot[dev.fd]
                             if event.value == -1:
+                                xy = pos[dev.fd].get(slot)   # capture lift position (now known)
+                                if xy is not None:
+                                    lifts.append((dev.fd, list(xy)))
                                 slots[dev.fd].pop(slot, None)
+                                pos[dev.fd].pop(slot, None)
                             else:
                                 slots[dev.fd][slot] = True
                                 touch_down = True   # a finger landed (even a quick tap)
@@ -155,6 +220,21 @@ def watch(devices: list) -> None:
             _wake_on_touch()
             last_wake = now
 
+        # Corner-tap admin gesture: a tap that lifts in any corner counts; CORNER_TAPS of them
+        # within CORNER_WINDOW opens admin. (Position is read at lift, when it's known.)
+        for fd, xy in lifts:
+            xmax, ymax = ranges.get(fd, (0, 0))
+            if _is_corner(xy[0], xy[1], xmax, ymax):
+                corner_taps.append(now)
+        if corner_taps:
+            corner_taps = [t for t in corner_taps if now - t <= CORNER_WINDOW]
+            if len(corner_taps) >= CORNER_TAPS and now - last_trigger >= COOLDOWN_SECONDS:
+                logger.info("corner-tap admin gesture (%d taps)", len(corner_taps))
+                _spawn_admin_overlay()
+                last_trigger = now
+                corner_taps = []
+
+        # 5-finger long-press (now launched via the proper unfullscreen path too).
         if active >= HOLD_FINGERS:
             if held_since is None:
                 held_since = now

@@ -4,6 +4,11 @@ Most recent first. These notes are shown in the admin overlay before you apply a
 kiosk update, so an operator can see what an update will install before confirming.
 
 ## 2026-06-19
+- **Easier admin access on touch kiosks:** open the admin panel by **tapping any screen
+  corner 5 times** (within a few seconds) — works on any touchscreen, including 2-touch
+  panels. The old 5-finger hold still works too, and **both now reliably bring the panel to
+  the front**: previously the gesture could open the admin window *behind* the fullscreen
+  display, so it looked like nothing happened. (No action needed; applies on update.)
 - **Tap to wake during quiet hours:** when a display is scheduled to sleep (power
   schedule), a single touch now wakes the screen for **30 minutes** before it returns
   to sleep — and each tap restarts the 30-minute timer. Great for a hallway board that's
