@@ -1,30 +1,46 @@
 #!/usr/bin/env bash
 # Per-output independent rendering: one Chromium per connected output, each showing the content
 # assigned to that output in /var/lib/bluebird-kiosk/display-content.json (written by the heartbeat
-# from the cloud per-output bindings). The ONLY sway `exec` when DISPLAY_LAYOUT=independent
-# (launch-bluebird-session dispatches here instead of launch-kiosk-chromium).
+# from the cloud per-output bindings). The ONLY sway `exec` when DISPLAY_LAYOUT=independent.
 #
-# Placement: each output gets its own workspace bound to it; we focus that workspace, then launch
-# Chromium so it maps there. Each output gets its own --user-data-dir (separate instance). Every
-# screen goes through launch-kiosk-chromium, so each independently arms ?kiosk_cache=1 (the
-# emergency takeover) and gets the local image cache.
-#
-# Reconcile loop: pgrep guards make steady state a near-no-op; a crashed per-output Chromium or a
-# hotplugged screen is (re)launched on the next pass.
+# DETERMINISTIC PLACEMENT (do NOT rely on focus-at-launch — a window maps on whatever workspace is
+# focused when it PAINTS, and Chromium paints slowly, which races two screens onto one output):
+#   1. snapshot the set of Chromium windows,
+#   2. launch the output's Chromium (own profile + URL),
+#   3. poll the sway tree until a NEW Chromium window appears,
+#   4. move THAT window (by con_id) to the target output + fullscreen.
+# Every screen goes through launch-kiosk-chromium, so each independently arms ?kiosk_cache=1
+# (the emergency takeover) + the local image cache. A reconcile loop relaunches a crashed
+# per-output Chromium / picks up a hotplug.
 set -u
 
 CONTENT=/var/lib/bluebird-kiosk/display-content.json
 LAUNCHER=/opt/bluebird-kiosk/bin/launch-kiosk-chromium
 
+# con_ids of all current Chromium windows (one per line).
+_chromium_ids() {
+  swaymsg -t get_tree 2>/dev/null | python3 -c "
+import sys, json
+def walk(n):
+    for c in (n.get('nodes') or []) + (n.get('floating_nodes') or []):
+        aid = (c.get('app_id') or '')
+        if 'chrom' in aid.lower() and c.get('pid'):
+            print(c['id'])
+        walk(c)
+try: walk(json.load(sys.stdin))
+except Exception: pass
+" 2>/dev/null
+}
+
 _field() {  # _field <output> <mode|url>
-  python3 -c "import json,sys
+  python3 -c "import json
 try: o=json.load(open('$CONTENT')).get('outputs',{}).get('$1',{})
 except Exception: o={}
 print(o.get('$2',''))" 2>/dev/null
 }
 
 reconcile() {
-  local names name safe profile ws mode url
+  local names name safe profile mode url before after new i
   names=$(swaymsg -t get_outputs 2>/dev/null | python3 -c "import sys,json
 try: d=json.load(sys.stdin)
 except Exception: d=[]
@@ -32,23 +48,31 @@ except Exception: d=[]
   for name in $names; do
     safe=$(printf '%s' "$name" | tr -c 'A-Za-z0-9' '_')
     profile="/var/lib/bluebird-kiosk/kiosk-chromium-$safe"
-    # Already a Chromium for this output? leave it.
     if pgrep -f -- "--user-data-dir=$profile" >/dev/null 2>&1; then
-      continue
+      continue   # already a Chromium for this output
     fi
     mode=$(_field "$name" mode); url=$(_field "$name" url)
     [[ -z "$mode" ]] && mode=legacy_wall
-    # Bind a workspace to this output + focus it so the new window maps on this screen.
-    swaymsg "workspace \"o_$name\" output \"$name\"" >/dev/null 2>&1 || true
-    swaymsg "workspace \"o_$name\"" >/dev/null 2>&1 || true
+    before=$(_chromium_ids | sort -u)
     if [[ "$mode" == "signage" && -n "$url" ]]; then
       KIOSK_PROFILE_OVERRIDE="$profile" KIOSK_OUTPUT_URL="$url" "$LAUNCHER" >/dev/null 2>&1 &
     else
       KIOSK_PROFILE_OVERRIDE="$profile" KIOSK_FORCE_LEGACY_WALL=1 "$LAUNCHER" >/dev/null 2>&1 &
     fi
-    # Let it map on the focused workspace (the Legacy Wall path probes the cloud ~4s) before the
-    # next output steals focus.
-    sleep 7
+    # Wait (≤30s) for the new window, then move it to THIS output + fullscreen.
+    new=""
+    for i in $(seq 1 60); do
+      sleep 0.5
+      after=$(_chromium_ids | sort -u)
+      new=$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after") | head -1)
+      [[ -n "$new" ]] && break
+    done
+    if [[ -n "$new" ]]; then
+      # unfullscreen → move → fullscreen: sway can refuse to move a fullscreen window between outputs
+      swaymsg "[con_id=$new] fullscreen disable" >/dev/null 2>&1 || true
+      swaymsg "[con_id=$new] move container to output \"$name\"" >/dev/null 2>&1 || true
+      swaymsg "[con_id=$new] fullscreen enable" >/dev/null 2>&1 || true
+    fi
   done
 }
 
