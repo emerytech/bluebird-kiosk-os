@@ -45,14 +45,17 @@ _map_touch() {
   # other screen. On these kiosks the built-in touch panel runs the Legacy Wall and the Beacon
   # display is a non-touch commercial panel, so the LW output is the touch target. (Idempotent —
   # re-asserting the same mapping is harmless; covers touch-device hotplug.)
-  local lw
-  lw=$(python3 -c "import json
+  local t
+  t=$(python3 -c "import json
 try: d=json.load(open('$CONTENT')).get('outputs',{})
 except Exception: d={}
+# An output explicitly flagged touch=true wins; else fall back to the legacy_wall output.
 for n,o in d.items():
-    if (o or {}).get('mode')=='legacy_wall':
-        print(n); break" 2>/dev/null)
-  [[ -n "$lw" ]] && swaymsg "input type:touch map_to_output \"$lw\"" >/dev/null 2>&1 || true
+    if (o or {}).get('touch'): print(n); break
+else:
+    for n,o in d.items():
+        if (o or {}).get('mode')=='legacy_wall': print(n); break" 2>/dev/null)
+  [[ -n "$t" ]] && swaymsg "input type:touch map_to_output \"$t\"" >/dev/null 2>&1 || true
 }
 
 reconcile() {

@@ -374,10 +374,12 @@ def _apply_output_assignments(oa: Any) -> None:
                 if str(a.get("mode") or "") == "signage":
                     url = config.derive_beacon_url(
                         backend, str(a.get("slug") or ""), str(a.get("public_key") or ""))
-                    content[str(name)] = ({"mode": "signage", "url": url} if url
-                                          else {"mode": "legacy_wall", "url": ""})
+                    entry = ({"mode": "signage", "url": url} if url
+                             else {"mode": "legacy_wall", "url": ""})
                 else:
-                    content[str(name)] = {"mode": "legacy_wall", "url": ""}
+                    entry = {"mode": "legacy_wall", "url": ""}
+                entry["touch"] = bool(a.get("touch"))   # which screen gets touch input
+                content[str(name)] = entry
             try:
                 cur = (json.loads(_CONTENT_PATH.read_text(encoding="utf-8")).get("outputs")
                        if _CONTENT_PATH.exists() else None)
