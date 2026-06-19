@@ -31,6 +31,15 @@ CLOUD_URL="${LEGACY_WALL_URL:-}"
 DISPLAY_MODE="${DISPLAY_MODE:-legacy_wall}"
 SIGNAGE_URL="${SIGNAGE_URL:-}"
 
+# Per-output independent mode (set by launch-kiosk-independent, one launch per screen):
+#   KIOSK_FORCE_LEGACY_WALL=1  → ignore the single binding, resolve the Legacy Wall (probe+fallback)
+#   KIOSK_OUTPUT_URL=<url>      → render this exact cloud URL (a Beacon display), arming kiosk_cache
+# These override the kiosk.conf single binding for THIS launch only.
+if [[ "${KIOSK_FORCE_LEGACY_WALL:-}" == "1" ]]; then
+  DISPLAY_MODE="legacy_wall"
+  SIGNAGE_URL=""
+fi
+
 # Wait for the local admin server first — needed either way (local
 # renderer + diagnostic console). Without this wait, Chromium can fire
 # before FastAPI binds and end up on a connection-refused error page.
@@ -83,6 +92,14 @@ if [[ -n "${KIOSK_URL:-}" ]]; then
   URL="$KIOSK_URL"
 fi
 
+# Per-output Beacon URL (independent mode) — like KIOSK_URL but treated as a cloud target so
+# kiosk_cache=1 still gets appended below (which arms the emergency takeover on that screen).
+KIOSK_OUTPUT_ARM=""
+if [[ -n "${KIOSK_OUTPUT_URL:-}" ]]; then
+  URL="$KIOSK_OUTPUT_URL"
+  KIOSK_OUTPUT_ARM=1
+fi
+
 # Cloud Legacy Wall reads ?kiosk_cache=1 and (via a small inline JS
 # shim at the top of the body) rewrites every image URL to point at
 # the kiosk's local FastAPI server. The local server returns cached
@@ -101,7 +118,8 @@ fi
 # the emergency-takeover poller embedded in the page; gating on ==CLOUD_URL alone
 # left the takeover silently dead on a signage display (Beacon §13-C1).
 if { { [[ -n "$CLOUD_URL" ]] && [[ "$URL" == "$CLOUD_URL" ]]; } \
-     || { [[ -n "$SIGNAGE_URL" ]] && [[ "$URL" == "$SIGNAGE_URL" ]]; }; } \
+     || { [[ -n "$SIGNAGE_URL" ]] && [[ "$URL" == "$SIGNAGE_URL" ]]; } \
+     || [[ "${KIOSK_OUTPUT_ARM:-}" == "1" ]]; } \
    && [[ "$URL" != *"kiosk_cache=1"* ]]; then
   if [[ "$URL" == *\?* ]]; then
     URL="${URL}&kiosk_cache=1"
@@ -153,7 +171,9 @@ fi
 #   - PLUS: HTTP cache persists ACROSS the launch (we wipe the dir
 #     BEFORE chromium starts, then chromium populates it; on the
 #     next reboot the previous cache is gone) — same as incognito.
-KIOSK_PROFILE_DIR=/var/lib/bluebird-kiosk/kiosk-chromium
+# Per-output independent mode gives each screen its own profile dir (a separate chromium
+# instance — a shared dir would make the 2nd launch attach to the 1st via the singleton lock).
+KIOSK_PROFILE_DIR="${KIOSK_PROFILE_OVERRIDE:-/var/lib/bluebird-kiosk/kiosk-chromium}"
 rm -rf "$KIOSK_PROFILE_DIR" 2>/dev/null || true
 mkdir -p "$KIOSK_PROFILE_DIR/Default"
 

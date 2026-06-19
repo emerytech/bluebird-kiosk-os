@@ -42,16 +42,25 @@ SETTINGS_PATH = Path("/var/lib/bluebird-kiosk/display-settings.json")
 INVENTORY_PATH = Path("/var/lib/bluebird-kiosk/outputs.json")
 
 
-def _mode() -> str:
+def _conf_val(key: str, default: str = "") -> str:
     try:
         for line in CONF.read_text(encoding="utf-8").splitlines():
             line = line.strip()
-            if line.startswith("KIOSK_DISPLAY_MODE="):
-                val = line.split("=", 1)[1].strip().strip('"').strip("'").lower()
-                return val or "mirror"
+            if line.startswith(key + "="):
+                return line.split("=", 1)[1].strip().strip('"').strip("'").lower() or default
     except OSError:
         pass
-    return "mirror"
+    return default
+
+
+def _mode() -> str:
+    return _conf_val("KIOSK_DISPLAY_MODE", "mirror")
+
+
+def _layout() -> str:
+    # DISPLAY_LAYOUT=independent => per-output Chromium (launch-kiosk-independent renders); the
+    # manager must NOT mirror in that case (each output is a separate screen on its own workspace).
+    return _conf_val("DISPLAY_LAYOUT", "")
 
 
 def _sway(*args) -> None:
@@ -141,7 +150,8 @@ def _apply_brightness() -> None:
 
 
 def main() -> int:
-    mirror = (_mode() != "extend")
+    # Independent mode => never stack outputs (each screen renders its own content side by side).
+    mirror = (_layout() != "independent") and (_mode() != "extend")
     restored: set = set()
     _apply_brightness()                              # backlight is global — restore once at start
     while True:
