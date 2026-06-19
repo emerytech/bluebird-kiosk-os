@@ -3,7 +3,12 @@
 Most recent first. These notes are shown in the admin overlay before you apply a
 kiosk update, so an operator can see what an update will install before confirming.
 
-## 2026-06-18
+## 2026-06-19
+- **Tap to wake during quiet hours:** when a display is scheduled to sleep (power
+  schedule), a single touch now wakes the screen for **30 minutes** before it returns
+  to sleep — and each tap restarts the 30-minute timer. Great for a hallway board that's
+  off after hours when someone walks up to check it. Emergency alerts still force the
+  screen on regardless. (No action needed; applies on update.)
 - **Forget a WiFi network:** the admin overlay's Network tab now has a **Saved
   networks** list — tap **Forget** (then tap again to confirm) to remove a network
   the kiosk remembers, so it stops auto-reconnecting to a wrong or old one. (No

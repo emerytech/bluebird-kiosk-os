@@ -7,6 +7,8 @@ wall must never go dark by accident.
 """
 import importlib.machinery
 import importlib.util
+import json
+import time
 from datetime import datetime
 from pathlib import Path
 from unittest import mock
@@ -107,3 +109,71 @@ def test_parse_hhmm():
     assert ps._parse_hhmm("24:00") is None
     assert ps._parse_hhmm("bad") is None
     assert ps._parse_hhmm(None) is None
+
+
+# ── touch-to-wake override (only ever forces ON; safe direction) ───────────────
+
+def _write_wake(p, wake_until):
+    p.write_text(json.dumps({"wake_until": wake_until}), encoding="utf-8")
+
+
+def test_wake_active_future_true(tmp_path):
+    f = tmp_path / "wake.json"; _write_wake(f, time.time() + 300)
+    with mock.patch.object(ps, "WAKE_PATH", f):
+        assert ps._wake_active() is True
+
+
+def test_wake_active_expired_false(tmp_path):
+    f = tmp_path / "wake.json"; _write_wake(f, time.time() - 1)
+    with mock.patch.object(ps, "WAKE_PATH", f):
+        assert ps._wake_active() is False
+
+
+def test_wake_active_missing_or_malformed_false(tmp_path):
+    f = tmp_path / "wake.json"
+    with mock.patch.object(ps, "WAKE_PATH", f):
+        assert ps._wake_active() is False          # missing file
+    f.write_text("not json", encoding="utf-8")
+    with mock.patch.object(ps, "WAKE_PATH", f):
+        assert ps._wake_active() is False          # malformed
+
+
+def test_main_wake_override_forces_on_during_off_hours(tmp_path):
+    f = tmp_path / "wake.json"; _write_wake(f, time.time() + 300)
+    applied, state = {}, {}
+    with mock.patch.object(ps, "WAKE_PATH", f), \
+            mock.patch.object(ps, "_emergency_active", return_value=False), \
+            mock.patch.object(ps, "_read_schedule", return_value={"enabled": True}), \
+            mock.patch.object(ps, "_desired_on", return_value=False), \
+            mock.patch.object(ps, "_apply", side_effect=lambda on: applied.__setitem__("on", on)), \
+            mock.patch.object(ps, "_write_state",
+                              side_effect=lambda on, reason: state.update({"on": on, "reason": reason})):
+        rc = ps.main()
+    assert rc == 0 and applied["on"] is True
+    assert state == {"on": True, "reason": "wake_override"}
+
+
+def test_main_expired_wake_lets_schedule_blank(tmp_path):
+    f = tmp_path / "wake.json"; _write_wake(f, time.time() - 1)
+    applied = {}
+    with mock.patch.object(ps, "WAKE_PATH", f), \
+            mock.patch.object(ps, "_emergency_active", return_value=False), \
+            mock.patch.object(ps, "_read_schedule", return_value={"enabled": True}), \
+            mock.patch.object(ps, "_desired_on", return_value=False), \
+            mock.patch.object(ps, "_apply", side_effect=lambda on: applied.__setitem__("on", on)), \
+            mock.patch.object(ps, "_write_state"):
+        ps.main()
+    assert applied["on"] is False                  # schedule wins; not wrongly kept awake
+
+
+def test_main_emergency_beats_everything(tmp_path):
+    # an active incident forces ON even with no wake override — emergency precedence preserved
+    f = tmp_path / "wake.json"; _write_wake(f, time.time() - 1)
+    state = {}
+    with mock.patch.object(ps, "WAKE_PATH", f), \
+            mock.patch.object(ps, "_emergency_active", return_value=True), \
+            mock.patch.object(ps, "_apply", return_value=None), \
+            mock.patch.object(ps, "_write_state",
+                              side_effect=lambda on, reason: state.update({"on": on, "reason": reason})):
+        ps.main()
+    assert state == {"on": True, "reason": "incident"}

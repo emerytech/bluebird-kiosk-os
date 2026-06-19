@@ -14,6 +14,9 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
+# ProtectSystem=strict makes the whole tree read-only; the daemon must write the touch-to-wake
+# override here (and chromium's admin-overlay user-data-dir lives under this path too).
+ReadWritePaths=/var/lib/bluebird-kiosk
 # Needs read access to /dev/input/event* to receive multitouch events.
 SupplementaryGroups=input
 
