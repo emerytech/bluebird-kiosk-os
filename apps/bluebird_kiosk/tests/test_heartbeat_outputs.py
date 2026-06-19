@@ -52,7 +52,7 @@ def test_apply_output_assignments_writes_content_and_restarts(tmp_path, monkeypa
     content = json.loads((tmp_path / "display-content.json").read_text(encoding="utf-8"))["outputs"]
     assert content["HDMI-A-1"]["mode"] == "signage"
     assert content["HDMI-A-1"]["url"].endswith("/nen/beacon/d/KEY")
-    assert content["DP-1"] == {"mode": "legacy_wall", "url": ""}
+    assert content["DP-1"]["mode"] == "legacy_wall" and content["DP-1"]["touch"] is False
     assert written.get("DISPLAY_LAYOUT") == "independent" and restarts
 
 
@@ -69,7 +69,7 @@ def test_apply_output_assignments_reverts_to_mirror(tmp_path, monkeypatch):
 
 def test_apply_output_assignments_noop_when_unchanged(tmp_path, monkeypatch):
     f = tmp_path / "display-content.json"
-    f.write_text(json.dumps({"outputs": {"DP-1": {"mode": "legacy_wall", "url": ""}}}), encoding="utf-8")
+    f.write_text(json.dumps({"outputs": {"DP-1": {"mode": "legacy_wall", "url": "", "touch": False}}}), encoding="utf-8")
     monkeypatch.setattr(hb, "_CONTENT_PATH", f)
     restarts = []
     monkeypatch.setattr(hb.config, "read_config", lambda: {"BLUEBIRD_BACKEND": "x", "DISPLAY_LAYOUT": "independent"})
