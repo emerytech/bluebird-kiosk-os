@@ -140,6 +140,31 @@ def _read_kiosk_os_version() -> Optional[str]:
         return None
 
 
+_OUTPUTS_PATH = Path("/var/lib/bluebird-kiosk/outputs.json")
+
+
+def _collect_outputs() -> Optional[List[Dict[str, Any]]]:
+    """Read the display output inventory published by kiosk-display-manager (the heartbeat is
+    sandboxed and can't reach the sway socket itself). Returns None if absent/empty so the
+    server keeps the previously stored inventory via COALESCE."""
+    try:
+        data = json.loads(_OUTPUTS_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, list) or not data:
+        return None
+    out: List[Dict[str, Any]] = []
+    for o in data[:16]:
+        if isinstance(o, dict) and o.get("name"):
+            out.append({
+                "name": str(o["name"])[:64],
+                "mode": (str(o["mode"])[:32] if o.get("mode") else None),
+                "active": (bool(o["active"]) if o.get("active") is not None else None),
+                "transform": (str(o["transform"])[:16] if o.get("transform") else None),
+            })
+    return out or None
+
+
 def _collect_resource_snapshot() -> Dict[str, Any]:
     """Build the resource portion of the heartbeat payload. Any field that
     fails to sample is simply omitted — the server keeps the previously
@@ -380,6 +405,9 @@ def send_once() -> bool:
         "display_scheduled_off": _read_display_scheduled_off(),
     }
     payload.update(_collect_resource_snapshot())
+    outs = _collect_outputs()
+    if outs:
+        payload["outputs"] = outs
     url = backend.rstrip("/") + "/api/public/kiosk/heartbeat"
     # Bearer when licensed — this is what authorizes remote-command
     # delivery. Unlicensed (pre-firstboot) kiosks heartbeat slug-only

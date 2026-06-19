@@ -107,3 +107,23 @@ def test_restore_reapplies_after_replug(monkeypatch):
     monkeypatch.setattr(dm, "_outputs", lambda: out)    # re-plug -> restored again
     dm.reconcile(True, restored)
     assert ("output", "DP-1", "transform", "90") in cmds
+
+
+# ── output inventory (published for the heartbeat) ─────────────────────────────
+
+def test_mode_str_variants():
+    assert dm._mode_str({"current_mode": {"width": 1920, "height": 1080, "refresh": 60000}}) == "1920x1080@60Hz"
+    assert dm._mode_str({"current_mode": {"width": 1280, "height": 720}}) == "1280x720"
+    assert dm._mode_str({"rect": {"width": 800, "height": 600}}) == "800x600"
+    assert dm._mode_str({}) == ""
+
+
+def test_reconcile_publishes_inventory(tmp_path, monkeypatch):
+    import json as _json
+    monkeypatch.setattr(dm, "INVENTORY_PATH", tmp_path / "outputs.json")
+    _capture(monkeypatch, [{"name": "DP-1", "active": True, "rect": {"x": 0, "y": 0},
+                            "transform": "normal",
+                            "current_mode": {"width": 1920, "height": 1080, "refresh": 60000}}])
+    dm.reconcile(True, set())
+    inv = _json.loads((tmp_path / "outputs.json").read_text(encoding="utf-8"))
+    assert inv == [{"name": "DP-1", "mode": "1920x1080@60Hz", "active": True, "transform": "normal"}]

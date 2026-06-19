@@ -36,6 +36,10 @@ CONF = Path("/etc/bluebird/kiosk.conf")
 # persist_settings). Re-applied here on session start + on hotplug so settings survive a reboot
 # or unattended self-update — a portrait hallway board stays portrait.
 SETTINGS_PATH = Path("/var/lib/bluebird-kiosk/display-settings.json")
+# Current output inventory, written here for the heartbeat to report to the fleet console (the
+# heartbeat is sandboxed and can't reach the sway socket itself). Feeds per-output content
+# binding — the admin sees each kiosk's output names.
+INVENTORY_PATH = Path("/var/lib/bluebird-kiosk/outputs.json")
 
 
 def _mode() -> str:
@@ -73,10 +77,35 @@ def _load_saved() -> dict:
         return {}
 
 
+def _mode_str(o: dict) -> str:
+    cm = o.get("current_mode") or {}
+    w, h, r = cm.get("width"), cm.get("height"), cm.get("refresh")
+    if w and h:
+        return "%dx%d@%dHz" % (w, h, round(r / 1000)) if r else "%dx%d" % (w, h)
+    rect = o.get("rect") or {}
+    if rect.get("width") and rect.get("height"):
+        return "%dx%d" % (rect["width"], rect["height"])
+    return ""
+
+
+def _write_inventory(outs: list) -> None:
+    inv = [{"name": o.get("name"), "mode": _mode_str(o),
+            "active": bool(o.get("active", False)), "transform": o.get("transform")}
+           for o in outs if o.get("name")]
+    try:
+        INVENTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = INVENTORY_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(inv), encoding="utf-8")
+        tmp.replace(INVENTORY_PATH)
+    except OSError:
+        pass
+
+
 def reconcile(mirror: bool, restored: set) -> None:
     saved_outs = (_load_saved().get("outputs") or {})
+    outs = _outputs()
     present = set()
-    for o in _outputs():
+    for o in outs:
         name = o.get("name")
         if not name:
             continue
@@ -99,6 +128,7 @@ def reconcile(mirror: bool, restored: set) -> None:
                 _sway("output", name, "mode", str(m))
             restored.add(name)
     restored.intersection_update(present)            # drop unplugged outputs so a re-plug re-applies
+    _write_inventory(outs)                           # publish for the heartbeat to report
 
 
 def _apply_brightness() -> None:
