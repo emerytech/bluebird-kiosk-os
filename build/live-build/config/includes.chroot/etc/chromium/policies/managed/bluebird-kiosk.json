@@ -13,5 +13,7 @@
   ],
   "DefaultLocalNetworkAccessSetting": 1,
   "DefaultNotificationsSetting": 2,
-  "PromptForDownloadLocation": false
+  "PromptForDownloadLocation": false,
+  "_devtools_comment": "Disallow DevTools everywhere — on an unattended kiosk it's only an attack surface (e.g. reading the enrollment token off the admin overlay via a plugged-in USB keyboard). 2 = disallowed for all.",
+  "DeveloperToolsAvailability": 2
 }

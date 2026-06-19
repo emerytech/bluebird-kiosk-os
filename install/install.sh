@@ -355,6 +355,15 @@ install -m 0644 \
   "$LIVE_BUILD_INC/etc/chromium/policies/managed/bluebird-kiosk.json" \
   /etc/chromium/policies/managed/
 
+# journald cap (+ persistent) and coredump-off drop-ins — keep an unattended kiosk from
+# filling its disk over months of uptime. New files, so they must be applied on update too,
+# not just baked into the ISO.
+log "installing journald + coredump limits"
+install -d /etc/systemd/journald.conf.d /etc/systemd/coredump.conf.d
+install -m 0644 "$LIVE_BUILD_INC/etc/systemd/journald.conf.d/10-bluebird.conf" /etc/systemd/journald.conf.d/
+install -m 0644 "$LIVE_BUILD_INC/etc/systemd/coredump.conf.d/10-bluebird.conf" /etc/systemd/coredump.conf.d/
+systemctl restart systemd-journald 2>/dev/null || true
+
 log "installing polkit rules"
 install -d /etc/polkit-1/rules.d
 install -m 0644 "$LIVE_BUILD_INC/etc/polkit-1/rules.d/49-bluebird-kiosk.rules" /etc/polkit-1/rules.d/
