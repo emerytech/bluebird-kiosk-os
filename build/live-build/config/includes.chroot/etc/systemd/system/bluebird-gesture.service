@@ -12,7 +12,9 @@ Restart=always
 RestartSec=2
 NoNewPrivileges=yes
 ProtectSystem=strict
-ProtectHome=yes
+# NOT ProtectHome — the daemon must reach the kiosk user's sway IPC socket under /run/user to
+# tell sway to launch the admin overlay (ProtectHome=yes hides /run/user). /home + /root stay
+# read-only via ProtectSystem=strict regardless.
 PrivateTmp=yes
 # ProtectSystem=strict makes the whole tree read-only; the daemon must write the touch-to-wake
 # override here (and chromium's admin-overlay user-data-dir lives under this path too).
