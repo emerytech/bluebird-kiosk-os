@@ -1,14 +1,15 @@
 [Unit]
-Description=BlueBird Kiosk — capture screenshot every 60s
+Description=BlueBird Kiosk — capture screenshot every 120s
 PartOf=bluebird-kiosk.target
 
 [Timer]
-# 30s after boot to give sway + chromium time to render, then every 60s.
-# RandomizedDelaySec=15 jitters fleet uploads so a 100-device deploy
-# doesn't hit the backend in lockstep.
+# 30s after boot to give sway + chromium time to render, then every 120s.
+# 120s (was 60s) roughly halves fleet screenshot egress while still catching a
+# wedged/blank board well within a couple of minutes. RandomizedDelaySec jitters
+# fleet uploads so a 100-device deploy doesn't hit the backend in lockstep.
 OnBootSec=30s
-OnUnitActiveSec=60s
-RandomizedDelaySec=15
+OnUnitActiveSec=120s
+RandomizedDelaySec=20
 Unit=bluebird-screenshot.service
 AccuracySec=5s
 

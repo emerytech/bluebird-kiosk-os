@@ -224,4 +224,5 @@ exec /usr/bin/chromium \
   ${EXT_FLAG} \
   --user-agent="${DEFAULT_UA} ${UA_SUFFIX}" \
   --allow-running-insecure-content \
+  --disk-cache-size=104857600 \
   --app="$URL"

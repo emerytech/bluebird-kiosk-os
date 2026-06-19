@@ -4,6 +4,12 @@ Most recent first. These notes are shown in the admin overlay before you apply a
 kiosk update, so an operator can see what an update will install before confirming.
 
 ## 2026-06-19
+- **Resilience + cleanup tune-up:** fixed a case where a kiosk that was *online but showing the
+  offline board* (or on the firstboot setup screen) could mistakenly reboot-loop itself; capped
+  on-device logs (now kept across reboots for remote diagnosis) and turned off coredumps so a
+  kiosk can't slowly fill its own disk; halved screenshot frequency (lighter on the network);
+  bounded the browser cache; and disabled browser DevTools (security). (No action needed; applies
+  on update.)
 - **Easier admin access on touch kiosks:** open the admin panel by **tapping any screen
   corner 5 times** (within a few seconds) — works on any touchscreen, including 2-touch
   panels. The old 5-finger hold still works too, and **both now reliably bring the panel to

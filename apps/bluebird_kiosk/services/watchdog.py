@@ -78,6 +78,9 @@ DRY_RUN               = bool(_env_int("WATCHDOG_DRY_RUN", 0))
 
 STATE_PATH = Path("/run/bluebird-kiosk/watchdog.json")
 LAST_REBOOT_PATH = Path("/var/lib/bluebird-kiosk/watchdog-last-reboot")
+# Written when firstboot enrollment completes. Until it exists, the kiosk intentionally
+# sits on the setup screen — the watchdog observes but never "recovers" (reboots) it.
+CONFIGURED_PATH = Path("/etc/bluebird/configured")
 LOCAL_HEALTH_URL = "http://127.0.0.1:7311/_health"
 
 
@@ -167,10 +170,14 @@ def _run_checks() -> Tuple[bool, Dict[str, bool]]:
         # not the swaybar/swaybg/swayidle children (cmdlines have `sway`
         # as a substring but they're not the compositor).
         "sway_running":     _process_running("sway", exact=True),
-        # Full-cmdline match because we want THE kiosk chromium (with
-        # --app=https://...), not the admin-overlay chromium or any
-        # other chromium variant.
-        "chromium_running": _process_running(r"chromium.*--app=https"),
+        # Match THE kiosk chromium by its PROFILE DIR, not by --app=https: the
+        # kiosk legitimately runs --app=http://127.0.0.1 during offline fallback,
+        # firstboot, and Beacon local signage, so matching the URL scheme marks a
+        # healthy offline board as "chromium dead" and reboot-loops it (the
+        # opposite of resilient — KI-010). The profile dir is URL-agnostic and
+        # still excludes the admin-overlay chromium (…/admin-chromium).
+        "chromium_running": _process_running(
+            r"chromium.*--user-data-dir=/var/lib/bluebird-kiosk/kiosk-chromium"),
         "local_health":     health_ok,
         # Wedged-page detector: see page_fresh computed above.
         "page_fresh":       page_fresh,
@@ -300,6 +307,9 @@ def main() -> int:
         # 30-60s to come up on a fresh boot. Don't escalate during that
         # window or we'd reboot a kiosk that's mid-startup.
         in_boot_grace = uptime < BOOT_GRACE_SEC
+        # Pre-enrollment the kiosk sits on the firstboot setup screen by design —
+        # observe but never recover, or we'd reboot a box waiting to be configured.
+        not_configured = not CONFIGURED_PATH.exists()
 
         if all_pass:
             if state != "alive":
@@ -319,12 +329,12 @@ def main() -> int:
                 fail_streak, state, checks, failed,
             )
 
-            if in_boot_grace:
-                logger.info(
-                    "watchdog: in boot grace (%ss < %ss) — observing only",
-                    uptime, BOOT_GRACE_SEC,
-                )
-                _write_state("boot_grace", fail_streak, checks)
+            if in_boot_grace or not_configured:
+                reason = "boot grace (%ss < %ss)" % (uptime, BOOT_GRACE_SEC) \
+                    if in_boot_grace else "not yet configured (firstboot)"
+                logger.info("watchdog: %s — observing only", reason)
+                _write_state("boot_grace" if in_boot_grace else "unconfigured",
+                             fail_streak, checks)
             elif state == "alive" and fail_streak >= FAIL_THRESHOLD:
                 # Escalate to degraded → soft heal
                 state = "degraded"

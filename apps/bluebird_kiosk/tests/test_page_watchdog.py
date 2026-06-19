@@ -90,3 +90,24 @@ def test_page_fresh_is_critical(monkeypatch):
     monkeypatch.setattr(watchdog, "_local_health", lambda: (False, None))
     all_pass, checks = watchdog._run_checks()
     assert checks["local_health"] is False and checks["page_fresh"] is True
+
+
+def test_chromium_check_keys_on_profile_dir_not_https(monkeypatch):
+    # The kiosk legitimately runs --app=http://127.0.0.1 (offline fallback, firstboot, Beacon
+    # local signage), so the chromium liveness check must key on the PROFILE DIR, not the URL
+    # scheme — otherwise a healthy offline board reads as "chromium dead" and reboot-loops.
+    seen = []
+    monkeypatch.setattr(watchdog, "_process_running",
+                        lambda pat, **k: (seen.append(pat), True)[1])
+    monkeypatch.setattr(watchdog, "_local_health", lambda: (True, 0))
+    monkeypatch.setattr(watchdog, "_systemctl_is_active", lambda *a, **k: True)
+    watchdog._run_checks()
+    chromium_pats = [p for p in seen if "chromium" in p]
+    assert chromium_pats, "no chromium check ran"
+    assert any("kiosk-chromium" in p for p in chromium_pats)        # keys on the profile dir
+    assert not any("--app=https" in p for p in chromium_pats)       # not the URL scheme
+
+
+def test_configured_path_guards_firstboot():
+    # The watchdog must know the firstboot marker so it never 'recovers' an unconfigured kiosk.
+    assert str(watchdog.CONFIGURED_PATH) == "/etc/bluebird/configured"
