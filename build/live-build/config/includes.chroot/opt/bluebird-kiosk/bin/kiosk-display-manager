@@ -1,0 +1,96 @@
+#!/usr/bin/env python3
+"""BlueBird Kiosk OS — multi-display manager.
+
+Makes a freshly plugged-in HDMI/DP display light up with the board, and mirrors the board to
+every connected output by default (the common signage case: a hallway with N identical screens).
+Runs inside the sway session (sway `exec`), so it has SWAYSOCK/WAYLAND_DISPLAY.
+
+Design (deliberately conservative — must not regress the single-display, life-safety path):
+- Idempotent + event-driven. It only issues a swaymsg command when an output is actually
+  disabled or mispositioned, then re-checks on every sway `output` event (hotplug / unplug /
+  mode change). Steady state issues nothing, so there's no command churn and no event-feedback
+  loop (a command we send would emit an event, but the follow-up reconcile finds nothing to do).
+- SINGLE DISPLAY: the one output is already enabled at (0,0), so the manager does nothing at
+  all — behaviour is identical to before this existed.
+- It never disables or repositions during normal operation beyond the origin-stack, and it does
+  NOT fight the power scheduler: a DPMS-off output is still `active`, so we don't re-enable it;
+  the scheduler's `output * dpms ...` covers any output we add.
+
+Mode — /etc/bluebird/kiosk.conf  KIOSK_DISPLAY_MODE:
+  mirror (default)  every output stacked at (0,0); the fullscreen board shows on all of them.
+  extend            leave sway's default side-by-side layout; we only ensure each output is on.
+
+NOTE: mirroring identical screens is clean; mixed resolutions mirror the shared top-left region
+(the smaller panel shows a crop). Per-output independent content (each screen a different Beacon
+display) is a deliberate future step, not this.
+"""
+from __future__ import annotations
+
+import json
+import subprocess
+import time
+from pathlib import Path
+
+CONF = Path("/etc/bluebird/kiosk.conf")
+
+
+def _mode() -> str:
+    try:
+        for line in CONF.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("KIOSK_DISPLAY_MODE="):
+                val = line.split("=", 1)[1].strip().strip('"').strip("'").lower()
+                return val or "mirror"
+    except OSError:
+        pass
+    return "mirror"
+
+
+def _sway(*args) -> None:
+    try:
+        subprocess.run(["swaymsg", *args], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def _outputs() -> list:
+    try:
+        r = subprocess.run(["swaymsg", "-t", "get_outputs"],
+                           capture_output=True, text=True, timeout=10)
+        return json.loads(r.stdout) or []
+    except Exception:  # noqa: BLE001 — any failure: treat as no outputs, retry next event
+        return []
+
+
+def reconcile(mirror: bool) -> None:
+    for o in _outputs():
+        name = o.get("name")
+        if not name:
+            continue
+        if not o.get("active", False):
+            _sway("output", name, "enable")          # light up a newly plugged / disabled output
+        if mirror:
+            rect = o.get("rect") or {}
+            if rect.get("x") != 0 or rect.get("y") != 0:
+                _sway("output", name, "position", "0", "0")   # stack at origin == mirror
+
+
+def main() -> int:
+    mirror = (_mode() != "extend")
+    while True:
+        try:
+            reconcile(mirror)
+            # Block on sway output events; each line == one hotplug/unplug/mode change.
+            proc = subprocess.Popen(
+                ["swaymsg", "-t", "subscribe", "-m", '["output"]'],
+                stdout=subprocess.PIPE, text=True,
+            )
+            for _line in proc.stdout:  # type: ignore[union-attr]
+                reconcile(mirror)
+        except Exception:  # noqa: BLE001 — never let the manager die; back off and re-attach
+            pass
+        time.sleep(2)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
