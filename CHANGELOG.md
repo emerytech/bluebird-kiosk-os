@@ -4,6 +4,9 @@ Most recent first. These notes are shown in the admin overlay before you apply a
 kiosk update, so an operator can see what an update will install before confirming.
 
 ## 2026-06-19
+- **Display settings stick:** the rotation, resolution, and brightness you set on a kiosk now
+  survive reboots and updates — a portrait hallway board stays portrait, and a re-plugged HDMI
+  comes back with its saved rotation. (No action needed; applies on update.)
 - **Multiple displays + HDMI hotplug:** plug a second (or third) screen into a kiosk and it now
   lights up showing the board within ~a second — no reboot. By default every screen **mirrors**
   the same board (the common hallway case); set `KIOSK_DISPLAY_MODE=extend` in the kiosk config

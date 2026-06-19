@@ -32,6 +32,10 @@ import time
 from pathlib import Path
 
 CONF = Path("/etc/bluebird/kiosk.conf")
+# Operator-confirmed rotation/mode/brightness, written by the admin server (display.py
+# persist_settings). Re-applied here on session start + on hotplug so settings survive a reboot
+# or unattended self-update — a portrait hallway board stays portrait.
+SETTINGS_PATH = Path("/var/lib/bluebird-kiosk/display-settings.json")
 
 
 def _mode() -> str:
@@ -62,31 +66,64 @@ def _outputs() -> list:
         return []
 
 
-def reconcile(mirror: bool) -> None:
+def _load_saved() -> dict:
+    try:
+        return json.loads(SETTINGS_PATH.read_text(encoding="utf-8")) or {}
+    except (OSError, ValueError):
+        return {}
+
+
+def reconcile(mirror: bool, restored: set) -> None:
+    saved_outs = (_load_saved().get("outputs") or {})
+    present = set()
     for o in _outputs():
         name = o.get("name")
         if not name:
             continue
+        present.add(name)
         if not o.get("active", False):
             _sway("output", name, "enable")          # light up a newly plugged / disabled output
         if mirror:
             rect = o.get("rect") or {}
             if rect.get("x") != 0 or rect.get("y") != 0:
                 _sway("output", name, "position", "0", "0")   # stack at origin == mirror
+        # Restore saved rotation/mode ONCE per appearance (boot + each re-plug). Doing it once,
+        # not every event, means we don't fight a live operator change between events.
+        s = saved_outs.get(name)
+        if s and name not in restored:
+            t = s.get("transform")
+            if t and o.get("transform") != t:
+                _sway("output", name, "transform", str(t))
+            m = s.get("mode")
+            if m:
+                _sway("output", name, "mode", str(m))
+            restored.add(name)
+    restored.intersection_update(present)            # drop unplugged outputs so a re-plug re-applies
+
+
+def _apply_brightness() -> None:
+    b = _load_saved().get("brightness")
+    if isinstance(b, int) and 1 <= b <= 100:
+        try:
+            subprocess.run(["brightnessctl", "set", "%d%%" % b], capture_output=True, timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
 
 
 def main() -> int:
     mirror = (_mode() != "extend")
+    restored: set = set()
+    _apply_brightness()                              # backlight is global — restore once at start
     while True:
         try:
-            reconcile(mirror)
+            reconcile(mirror, restored)
             # Block on sway output events; each line == one hotplug/unplug/mode change.
             proc = subprocess.Popen(
                 ["swaymsg", "-t", "subscribe", "-m", '["output"]'],
                 stdout=subprocess.PIPE, text=True,
             )
             for _line in proc.stdout:  # type: ignore[union-attr]
-                reconcile(mirror)
+                reconcile(mirror, restored)
         except Exception:  # noqa: BLE001 — never let the manager die; back off and re-attach
             pass
         time.sleep(2)

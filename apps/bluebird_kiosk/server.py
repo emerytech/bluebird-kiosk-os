@@ -710,6 +710,10 @@ def create_app() -> FastAPI:
                 token, body.output, prev_transform, prev_mode
             ))
             revert_in = DISPLAY_REVERT_SECONDS
+        else:
+            # No rotation/mode change to confirm (brightness-only, etc.) — it's kept
+            # immediately, so snapshot it now so it survives reboot/update.
+            display.persist_settings()
 
         return JSONResponse({
             "ok": True,
@@ -724,6 +728,9 @@ def create_app() -> FastAPI:
         had_pending = app.state.display_revert_pending.pop("token", None) is not None
         # Drop the rest of the dict too.
         app.state.display_revert_pending.clear()
+        if had_pending:
+            # Operator kept the rotation/mode change — snapshot it so it survives reboot/update.
+            display.persist_settings()
         return JSONResponse({"ok": True, "was_pending": had_pending})
 
     @app.post("/admin/display/revert-now", dependencies=[Depends(require_admin)])

@@ -11,10 +11,18 @@ default socket name when nothing else is running).
 from __future__ import annotations
 
 import glob
+import json
 import os
 import subprocess
 from dataclasses import dataclass
-from typing import Dict, List
+from pathlib import Path
+from typing import Dict, List, Optional
+
+# Confirmed display settings (rotation/mode per output + brightness) are snapshotted here so
+# they survive a reboot or an unattended self-update — kiosk-display-manager re-applies them on
+# session start + hotplug. Written only on an operator CONFIRM (kept change), never on the
+# auto-revert path, so an unconfirmed-and-rebooted change doesn't stick.
+SETTINGS_PATH = Path("/var/lib/bluebird-kiosk/display-settings.json")
 
 
 def _wayland_env() -> Dict[str, str]:
@@ -171,4 +179,38 @@ def set_brightness(percent: int) -> tuple[bool, str]:
         return False, f"brightnessctl failed: {exc}"
     if result.returncode != 0:
         return False, (result.stderr.strip() or "brightness failed")
+    return True, "OK"
+
+
+def get_brightness() -> Optional[int]:
+    """Current backlight as a 0-100 percent, or None if there's no backlight device
+    (e.g. a desktop box driving an external monitor — brightnessctl has nothing to read)."""
+    try:
+        cur = subprocess.run(["/usr/bin/brightnessctl", "get"],
+                             capture_output=True, text=True, timeout=5)
+        mx = subprocess.run(["/usr/bin/brightnessctl", "max"],
+                            capture_output=True, text=True, timeout=5)
+        c, m = int(cur.stdout.strip()), int(mx.stdout.strip())
+        return max(1, round(c * 100 / m)) if m else None
+    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
+        return None
+
+
+def persist_settings() -> tuple[bool, str]:
+    """Snapshot the CURRENT display config (per-output transform + mode, plus brightness) to
+    SETTINGS_PATH so it survives reboot/update. Call this only after a change is accepted
+    (operator confirm / brightness set) — never on the auto-revert path."""
+    data: Dict[str, object] = {"outputs": {}, "brightness": get_brightness()}
+    outs = data["outputs"]
+    assert isinstance(outs, dict)
+    for o in list_outputs():
+        if o.enabled and o.name:
+            outs[o.name] = {"transform": o.transform, "mode": o.current_mode}
+    try:
+        SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = SETTINGS_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data), encoding="utf-8")
+        tmp.replace(SETTINGS_PATH)
+    except OSError as exc:
+        return False, f"persist failed: {exc}"
     return True, "OK"
