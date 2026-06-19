@@ -29,6 +29,7 @@ import logging
 import pwd
 import subprocess
 import sys
+import time
 import urllib.request
 from datetime import datetime
 from pathlib import Path
@@ -45,6 +46,11 @@ SCHEDULE_PATH = Path("/var/lib/bluebird-kiosk/power_schedule.json")
 # the panel is scheduled-off) and by the heartbeat (report "scheduled off" to
 # the fleet console so it isn't mistaken for a wedged/black kiosk).
 STATE_PATH = Path("/var/lib/bluebird-kiosk/power_state.json")
+# Touch-to-wake override: the gesture daemon writes {"wake_until": <epoch secs>} here when the
+# screen is tapped during scheduled-off hours. While that timestamp is in the future the
+# scheduler forces the panel ON — a temporary reprieve before it returns to sleep. Fail-safe
+# direction: this can only ever turn the display ON, never off.
+WAKE_PATH = Path("/var/lib/bluebird-kiosk/wake_override.json")
 CONF_PATH = Path("/etc/bluebird/kiosk.conf")
 KIOSK_USER = "bluebird-kiosk"
 
@@ -97,6 +103,16 @@ def _read_schedule() -> dict:
         return json.loads(SCHEDULE_PATH.read_text(encoding="utf-8")) or {}
     except (OSError, ValueError):
         return {}
+
+
+def _wake_active() -> bool:
+    """True if an unexpired touch-to-wake override is present. Any error => False (no
+    override), so a missing or malformed file can never keep the panel awake forever."""
+    try:
+        data = json.loads(WAKE_PATH.read_text(encoding="utf-8")) or {}
+        return float(data.get("wake_until", 0)) > time.time()
+    except (OSError, ValueError, TypeError):
+        return False
 
 
 def _parse_hhmm(value) -> "int | None":
@@ -189,6 +205,13 @@ def main() -> int:
         return 0
     schedule = _read_schedule()
     desired = _desired_on(schedule)
+    # Touch-to-wake: a tap during scheduled-off hours grants a temporary reprieve. Checked
+    # only when the schedule wants the panel OFF, and only ever forces it ON (safe direction).
+    if not desired and _wake_active():
+        logger.info("touch-to-wake override active — forcing display ON")
+        _apply(True)
+        _write_state(True, "wake_override")
+        return 0
     _apply(desired)
     reason = "schedule" if (isinstance(schedule, dict) and schedule.get("enabled")) else "no_schedule"
     _write_state(desired, reason)
