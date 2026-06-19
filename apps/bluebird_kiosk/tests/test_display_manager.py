@@ -127,3 +127,16 @@ def test_reconcile_publishes_inventory(tmp_path, monkeypatch):
     dm.reconcile(True, set())
     inv = _json.loads((tmp_path / "outputs.json").read_text(encoding="utf-8"))
     assert inv == [{"name": "DP-1", "mode": "1920x1080@60Hz", "active": True, "transform": "normal"}]
+
+
+def test_independent_layout_disables_mirror(tmp_path, monkeypatch):
+    # When DISPLAY_LAYOUT=independent, the manager must NOT stack outputs (each screen is separate).
+    f = tmp_path / "kiosk.conf"; f.write_text("DISPLAY_LAYOUT=independent\n", encoding="utf-8")
+    monkeypatch.setattr(dm, "CONF", f)
+    assert dm._layout() == "independent"
+    cmds = _capture(monkeypatch, [
+        {"name": "DP-1", "active": True, "rect": {"x": 0, "y": 0}},
+        {"name": "HDMI-A-1", "active": True, "rect": {"x": 1920, "y": 0}},   # extended, NOT at 0,0
+    ])
+    dm.reconcile(False, set())   # mirror=False (independent)
+    assert not any("position" in c for c in cmds)   # never stacks in independent mode

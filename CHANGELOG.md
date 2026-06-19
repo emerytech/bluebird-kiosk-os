@@ -4,6 +4,10 @@ Most recent first. These notes are shown in the admin overlay before you apply a
 kiosk update, so an operator can see what an update will install before confirming.
 
 ## 2026-06-19
+- **Different content on each screen:** a kiosk with two (or more) displays can now show a
+  DIFFERENT board on each — e.g. the Legacy Wall on one screen and a Beacon board on the other,
+  set per-output from the admin. (Bind each screen in the admin; single-screen and mirror kiosks
+  are unaffected. Applies on update.)
 - **Display settings stick:** the rotation, resolution, and brightness you set on a kiosk now
   survive reboots and updates — a portrait hallway board stays portrait, and a re-plugged HDMI
   comes back with its saved rotation. (No action needed; applies on update.)

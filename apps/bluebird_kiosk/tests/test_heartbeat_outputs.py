@@ -34,3 +34,46 @@ def test_collect_outputs_caps_and_drops_nameless(tmp_path, monkeypatch):
     monkeypatch.setattr(hb, "_OUTPUTS_PATH", f)
     outs = hb._collect_outputs()
     assert len(outs) == 16 and all(o["name"] for o in outs)
+
+
+# ── Phase C: applying output_assignments -> display-content.json + DISPLAY_LAYOUT ──
+
+def test_apply_output_assignments_writes_content_and_restarts(tmp_path, monkeypatch):
+    monkeypatch.setattr(hb, "_CONTENT_PATH", tmp_path / "display-content.json")
+    cfg = {"BLUEBIRD_BACKEND": "https://bluebird-alerts.com", "DISPLAY_LAYOUT": "mirror"}
+    written, restarts = {}, []
+    monkeypatch.setattr(hb.config, "read_config", lambda: cfg)
+    monkeypatch.setattr(hb.config, "write_config", lambda v: written.update(v))
+    monkeypatch.setattr(hb, "_cmd_restart_kiosk", lambda: (restarts.append(1), (True, "ok"))[1])
+    hb._apply_output_assignments({
+        "HDMI-A-1": {"mode": "signage", "slug": "nen", "public_key": "KEY"},
+        "DP-1": {"mode": "legacy_wall"},
+    })
+    content = json.loads((tmp_path / "display-content.json").read_text(encoding="utf-8"))["outputs"]
+    assert content["HDMI-A-1"]["mode"] == "signage"
+    assert content["HDMI-A-1"]["url"].endswith("/nen/beacon/d/KEY")
+    assert content["DP-1"] == {"mode": "legacy_wall", "url": ""}
+    assert written.get("DISPLAY_LAYOUT") == "independent" and restarts
+
+
+def test_apply_output_assignments_reverts_to_mirror(tmp_path, monkeypatch):
+    f = tmp_path / "display-content.json"; f.write_text('{"outputs": {}}', encoding="utf-8")
+    monkeypatch.setattr(hb, "_CONTENT_PATH", f)
+    written, restarts = {}, []
+    monkeypatch.setattr(hb.config, "read_config", lambda: {"DISPLAY_LAYOUT": "independent"})
+    monkeypatch.setattr(hb.config, "write_config", lambda v: written.update(v))
+    monkeypatch.setattr(hb, "_cmd_restart_kiosk", lambda: (restarts.append(1), (True, "ok"))[1])
+    hb._apply_output_assignments(None)
+    assert written.get("DISPLAY_LAYOUT") == "mirror" and not f.exists() and restarts
+
+
+def test_apply_output_assignments_noop_when_unchanged(tmp_path, monkeypatch):
+    f = tmp_path / "display-content.json"
+    f.write_text(json.dumps({"outputs": {"DP-1": {"mode": "legacy_wall", "url": ""}}}), encoding="utf-8")
+    monkeypatch.setattr(hb, "_CONTENT_PATH", f)
+    restarts = []
+    monkeypatch.setattr(hb.config, "read_config", lambda: {"BLUEBIRD_BACKEND": "x", "DISPLAY_LAYOUT": "independent"})
+    monkeypatch.setattr(hb.config, "write_config", lambda v: None)
+    monkeypatch.setattr(hb, "_cmd_restart_kiosk", lambda: (restarts.append(1), (True, "ok"))[1])
+    hb._apply_output_assignments({"DP-1": {"mode": "legacy_wall"}})
+    assert not restarts   # identical -> no churn / no restart

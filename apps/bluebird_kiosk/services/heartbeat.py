@@ -354,6 +354,57 @@ def _read_display_scheduled_off() -> bool:
         return False
 
 
+_CONTENT_PATH = Path("/var/lib/bluebird-kiosk/display-content.json")
+
+
+def _apply_output_assignments(oa: Any) -> None:
+    """Translate per-output assignments into display-content.json + DISPLAY_LAYOUT=independent so
+    the kiosk renders one chromium per output (launch-kiosk-independent). An empty/None map reverts
+    to mirror (DISPLAY_LAYOUT=mirror). Restart only on a real change. A signage URL that can't be
+    derived degrades that output to legacy_wall (fail-safe). Never breaks the heartbeat."""
+    try:
+        cfg = config.read_config()
+        backend = cfg.get("BLUEBIRD_BACKEND") or ""
+        cur_layout = cfg.get("DISPLAY_LAYOUT") or "mirror"
+        if isinstance(oa, dict) and oa:
+            content = {}
+            for name, a in oa.items():
+                if not isinstance(a, dict):
+                    continue
+                if str(a.get("mode") or "") == "signage":
+                    url = config.derive_beacon_url(
+                        backend, str(a.get("slug") or ""), str(a.get("public_key") or ""))
+                    content[str(name)] = ({"mode": "signage", "url": url} if url
+                                          else {"mode": "legacy_wall", "url": ""})
+                else:
+                    content[str(name)] = {"mode": "legacy_wall", "url": ""}
+            try:
+                cur = (json.loads(_CONTENT_PATH.read_text(encoding="utf-8")).get("outputs")
+                       if _CONTENT_PATH.exists() else None)
+            except (OSError, ValueError):
+                cur = None
+            if cur_layout == "independent" and cur == content:
+                return  # no change — don't churn / restart
+            _CONTENT_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _CONTENT_PATH.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps({"outputs": content}), encoding="utf-8")
+            tmp.replace(_CONTENT_PATH)
+            config.write_config({"DISPLAY_LAYOUT": "independent"})
+            logger.info("heartbeat: per-output content (%d outputs) — restarting kiosk", len(content))
+            _cmd_restart_kiosk()
+        elif cur_layout == "independent":
+            # No per-output bindings anymore -> revert to mirror.
+            try:
+                _CONTENT_PATH.unlink()
+            except OSError:
+                pass
+            config.write_config({"DISPLAY_LAYOUT": "mirror"})
+            logger.info("heartbeat: per-output cleared -> mirror — restarting kiosk")
+            _cmd_restart_kiosk()
+    except Exception as exc:  # noqa: BLE001 — heartbeat must survive any failure here
+        logger.warning("heartbeat: could not apply output assignments: %s", exc)
+
+
 def _apply_display_assignment(assignment: Any) -> None:
     """Translate a Beacon `display_assignment` (bearer heartbeats only) into
     kiosk.conf so launch-kiosk-chromium picks the right URL on its next start:
@@ -447,6 +498,10 @@ def send_once() -> bool:
     # the key, so an older backend that omits it never clobbers the local mode.
     if token and isinstance(data, dict) and "display_assignment" in data:
         _apply_display_assignment(data.get("display_assignment"))
+    # Per-output content (one box, different content per screen). Takes precedence over the
+    # single assignment via DISPLAY_LAYOUT=independent; absent/null reverts to mirror.
+    if token and isinstance(data, dict) and "output_assignments" in data:
+        _apply_output_assignments(data.get("output_assignments"))
     return True
 
 

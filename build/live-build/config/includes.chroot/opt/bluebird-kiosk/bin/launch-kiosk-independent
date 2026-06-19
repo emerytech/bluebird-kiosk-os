@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Per-output independent rendering: one Chromium per connected output, each showing the content
+# assigned to that output in /var/lib/bluebird-kiosk/display-content.json (written by the heartbeat
+# from the cloud per-output bindings). The ONLY sway `exec` when DISPLAY_LAYOUT=independent
+# (launch-bluebird-session dispatches here instead of launch-kiosk-chromium).
+#
+# Placement: each output gets its own workspace bound to it; we focus that workspace, then launch
+# Chromium so it maps there. Each output gets its own --user-data-dir (separate instance). Every
+# screen goes through launch-kiosk-chromium, so each independently arms ?kiosk_cache=1 (the
+# emergency takeover) and gets the local image cache.
+#
+# Reconcile loop: pgrep guards make steady state a near-no-op; a crashed per-output Chromium or a
+# hotplugged screen is (re)launched on the next pass.
+set -u
+
+CONTENT=/var/lib/bluebird-kiosk/display-content.json
+LAUNCHER=/opt/bluebird-kiosk/bin/launch-kiosk-chromium
+
+_field() {  # _field <output> <mode|url>
+  python3 -c "import json,sys
+try: o=json.load(open('$CONTENT')).get('outputs',{}).get('$1',{})
+except Exception: o={}
+print(o.get('$2',''))" 2>/dev/null
+}
+
+reconcile() {
+  local names name safe profile ws mode url
+  names=$(swaymsg -t get_outputs 2>/dev/null | python3 -c "import sys,json
+try: d=json.load(sys.stdin)
+except Exception: d=[]
+[print(o['name']) for o in d if o.get('name')]" 2>/dev/null)
+  for name in $names; do
+    safe=$(printf '%s' "$name" | tr -c 'A-Za-z0-9' '_')
+    profile="/var/lib/bluebird-kiosk/kiosk-chromium-$safe"
+    # Already a Chromium for this output? leave it.
+    if pgrep -f -- "--user-data-dir=$profile" >/dev/null 2>&1; then
+      continue
+    fi
+    mode=$(_field "$name" mode); url=$(_field "$name" url)
+    [[ -z "$mode" ]] && mode=legacy_wall
+    # Bind a workspace to this output + focus it so the new window maps on this screen.
+    swaymsg "workspace \"o_$name\" output \"$name\"" >/dev/null 2>&1 || true
+    swaymsg "workspace \"o_$name\"" >/dev/null 2>&1 || true
+    if [[ "$mode" == "signage" && -n "$url" ]]; then
+      KIOSK_PROFILE_OVERRIDE="$profile" KIOSK_OUTPUT_URL="$url" "$LAUNCHER" >/dev/null 2>&1 &
+    else
+      KIOSK_PROFILE_OVERRIDE="$profile" KIOSK_FORCE_LEGACY_WALL=1 "$LAUNCHER" >/dev/null 2>&1 &
+    fi
+    # Let it map on the focused workspace (the Legacy Wall path probes the cloud ~4s) before the
+    # next output steals focus.
+    sleep 7
+  done
+}
+
+while true; do
+  reconcile
+  sleep 15
+done
