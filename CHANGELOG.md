@@ -4,6 +4,11 @@ Most recent first. These notes are shown in the admin overlay before you apply a
 kiosk update, so an operator can see what an update will install before confirming.
 
 ## 2026-06-19
+- **Multiple displays + HDMI hotplug:** plug a second (or third) screen into a kiosk and it now
+  lights up showing the board within ~a second — no reboot. By default every screen **mirrors**
+  the same board (the common hallway case); set `KIOSK_DISPLAY_MODE=extend` in the kiosk config
+  to keep sway's side-by-side layout instead. Single-screen kiosks are unaffected. (No action
+  needed; applies on update.)
 - **Resilience + cleanup tune-up:** fixed a case where a kiosk that was *online but showing the
   offline board* (or on the firstboot setup screen) could mistakenly reboot-loop itself; capped
   on-device logs (now kept across reboots for remote diagnosis) and turned off coredumps so a
