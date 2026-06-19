@@ -598,6 +598,12 @@ fi
 # to 1s, pass `quiet splash` so Plymouth takes over the boot output, and
 # stamp the distributor name so the boot menu entries read "BlueBird Kiosk"
 # instead of "Debian" / "Ubuntu". All edits are idempotent (sed in place).
+#
+# i915.enable_psr=0 + i915.enable_fbc=0: a signage box reconfigures displays
+# (hotplug, per-output modesets), and Intel Panel Self-Refresh / framebuffer
+# compression are the classic cause of "[CRTC] flip_done timed out" + vblank
+# WARNs on external panels. Disabling both makes Intel modesets reliable; the
+# cost (a little more power / GPU bandwidth) is irrelevant on an always-on wall.
 if [[ -f /etc/default/grub ]]; then
   log "configuring GRUB for silent splash boot"
   GRUB_TMP="$(mktemp)"
@@ -605,9 +611,9 @@ if [[ -f /etc/default/grub ]]; then
   # quiet splash on the linux cmdline. Replace whatever's there (preserve
   # any other flags the operator added by appending if not already present).
   if grep -q '^GRUB_CMDLINE_LINUX_DEFAULT=' "$GRUB_TMP"; then
-    sed -i 's|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT="quiet splash"|' "$GRUB_TMP"
+    sed -i 's|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT="quiet splash i915.enable_psr=0 i915.enable_fbc=0"|' "$GRUB_TMP"
   else
-    printf 'GRUB_CMDLINE_LINUX_DEFAULT="quiet splash"\n' >> "$GRUB_TMP"
+    printf 'GRUB_CMDLINE_LINUX_DEFAULT="quiet splash i915.enable_psr=0 i915.enable_fbc=0"\n' >> "$GRUB_TMP"
   fi
   # Hide the menu by default; Esc gets it back for recovery.
   if grep -q '^GRUB_TIMEOUT_STYLE=' "$GRUB_TMP"; then
