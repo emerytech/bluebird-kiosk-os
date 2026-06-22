@@ -120,7 +120,7 @@ fi
 
 menuentry "BlueBird Kiosk OS — autoinstall (default)" {
     set gfxpayload=keep
-    linux  $KERNEL_PATH quiet autoinstall ds=nocloud;s=/cdrom/nocloud/  ---
+    linux  $KERNEL_PATH quiet autoinstall "ds=nocloud;s=/cdrom/nocloud/" ---
     initrd $INITRD_PATH
 }
 
