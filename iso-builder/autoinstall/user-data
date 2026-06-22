@@ -105,6 +105,10 @@ autoinstall:
   ssh:
     install-server: true
     allow-pw: true
+    # Operator key baked in so the kiosk is reachable immediately after install:
+    #   ssh bluebird@<kiosk-ip>
+    authorized-keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL5tVq40eNULHfDKjAyAVY0H8LiKfQGaKou9AYg2CM9/ taylor@emerytechsolutions.com
 
   # The kiosk install bootstrap pulls everything else (sway, chromium, etc.).
   # We only need enough here to run the bootstrap itself.
