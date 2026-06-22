@@ -114,6 +114,7 @@ try:
     fd, tmp = tempfile.mkstemp(dir=d, suffix='.tmp')
     with os.fdopen(fd, 'w') as fh:
         fh.write(json.dumps({'ts': int(time.time()), 'outputs': out}))
+    os.chmod(tmp, 0o644)   # mkstemp is 0600; match the sibling json files so any reader can see it
     os.replace(tmp, path)
 except OSError:
     pass
