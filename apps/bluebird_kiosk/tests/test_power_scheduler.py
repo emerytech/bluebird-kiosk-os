@@ -177,3 +177,40 @@ def test_main_emergency_beats_everything(tmp_path):
                               side_effect=lambda on, reason: state.update({"on": on, "reason": reason})):
         ps.main()
     assert state == {"on": True, "reason": "incident"}
+
+
+# ── _sway_socket: pick the LIVE socket, not the lexically-first (dead) one ─────
+#
+# Regression: sway restarts once at boot (greetd conflict dance), so two sockets
+# exist — sway-ipc.<uid>.<oldpid>.sock (dead) and ...<newpid>.sock (live). The old
+# `sorted(globs)[0]` picked the oldest/dead one and every dpms toggle then failed.
+
+def test_socket_pid_parsing():
+    assert ps._socket_pid("/run/user/999/sway-ipc.999.2507.sock") == 2507
+    assert ps._socket_pid("/run/user/999/sway-ipc.999.1465.sock") == 1465
+    assert ps._socket_pid("/run/user/999/garbage.sock") is None
+    assert ps._socket_pid("no-sock-suffix") is None
+
+
+def test_sway_socket_prefers_live_pid_over_lexically_first():
+    both = ["/run/user/999/sway-ipc.999.1465.sock",   # lexically first, DEAD
+            "/run/user/999/sway-ipc.999.2507.sock"]   # live
+    with mock.patch.object(ps.glob, "glob", return_value=both), \
+            mock.patch.object(ps, "_pid_is_sway", side_effect=lambda pid: pid == 2507):
+        assert ps._sway_socket(999) == "/run/user/999/sway-ipc.999.2507.sock"
+
+
+def test_sway_socket_none_when_empty():
+    with mock.patch.object(ps.glob, "glob", return_value=[]):
+        assert ps._sway_socket(999) is None
+
+
+def test_sway_socket_falls_back_to_newest_mtime_when_none_live(tmp_path):
+    older = tmp_path / "sway-ipc.999.1.sock"; older.write_text("")
+    newer = tmp_path / "sway-ipc.999.2.sock"; newer.write_text("")
+    import os
+    os.utime(older, (1000, 1000))
+    os.utime(newer, (2000, 2000))
+    with mock.patch.object(ps.glob, "glob", return_value=[str(older), str(newer)]), \
+            mock.patch.object(ps, "_pid_is_sway", return_value=False):
+        assert ps._sway_socket(999) == str(newer)   # newest mtime wins as a safe fallback

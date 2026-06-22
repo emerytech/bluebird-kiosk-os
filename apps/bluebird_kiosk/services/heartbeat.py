@@ -165,6 +165,67 @@ def _collect_outputs() -> Optional[List[Dict[str, Any]]]:
     return out or None
 
 
+_OUTPUT_HEALTH_PATH = Path("/var/lib/bluebird-kiosk/output-health.json")
+
+
+def _collect_output_health() -> Optional[Dict[str, Any]]:
+    """Read per-output render health published by launch-kiosk-independent: which output (if any) is
+    parked on a server/browser error page (`wedged`), how many times we've auto-reloaded it
+    (`reloads`), and the current window title. None when absent/empty so the server keeps the prior
+    value via COALESCE. The heartbeat is sandboxed off the sway socket, so the in-session reconcile
+    loop is what writes this file (same pattern as outputs.json)."""
+    try:
+        data = json.loads(_OUTPUT_HEALTH_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    outs = data.get("outputs") if isinstance(data, dict) else None
+    if not isinstance(outs, dict) or not outs:
+        return None
+    clean: Dict[str, Any] = {}
+    for name, h in list(outs.items())[:16]:
+        if not isinstance(h, dict) or not name:
+            continue
+        try:
+            reloads = int(h.get("reloads") or 0)
+        except (TypeError, ValueError):
+            reloads = 0
+        clean[str(name)[:64]] = {
+            "wedged": bool(h.get("wedged")),
+            "reloads": reloads,
+            "title": (str(h.get("title"))[:120] if h.get("title") else None),
+        }
+    return clean or None
+
+
+_WATCHDOG_STATE_PATH = Path("/run/bluebird-kiosk/watchdog.json")
+
+
+def _collect_watchdog_state() -> Optional[Dict[str, Any]]:
+    """Read the reliability watchdog's current state (alive/degraded/recovering/cooldown + the
+    per-check booleans incl. page_fresh) so the fleet console can badge a self-healing kiosk. The
+    watchdog already mirrors this to /run; we just forward it. None when absent/unparseable."""
+    try:
+        data = json.loads(_WATCHDOG_STATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    state = str(data.get("state") or "")[:32]
+    if not state:
+        return None
+    checks = data.get("checks") if isinstance(data.get("checks"), dict) else {}
+    try:
+        fail_streak = int(data.get("fail_streak") or 0)
+    except (TypeError, ValueError):
+        fail_streak = 0
+    return {
+        "state": state,
+        "fail_streak": fail_streak,
+        "checks": {str(k)[:32]: bool(v) for k, v in list(checks.items())[:12]},
+        "last_action": (str(data.get("last_action"))[:48] if data.get("last_action") else None),
+    }
+
+
 def _collect_resource_snapshot() -> Dict[str, Any]:
     """Build the resource portion of the heartbeat payload. Any field that
     fails to sample is simply omitted — the server keeps the previously
@@ -461,6 +522,12 @@ def send_once() -> bool:
     outs = _collect_outputs()
     if outs:
         payload["outputs"] = outs
+    output_health = _collect_output_health()
+    if output_health:
+        payload["output_health"] = output_health
+    watchdog_state = _collect_watchdog_state()
+    if watchdog_state:
+        payload["watchdog"] = watchdog_state
     url = backend.rstrip("/") + "/api/public/kiosk/heartbeat"
     # Bearer when licensed — this is what authorizes remote-command
     # delivery. Unlicensed (pre-firstboot) kiosks heartbeat slug-only

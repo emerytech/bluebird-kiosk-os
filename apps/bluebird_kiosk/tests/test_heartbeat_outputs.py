@@ -77,3 +77,58 @@ def test_apply_output_assignments_noop_when_unchanged(tmp_path, monkeypatch):
     monkeypatch.setattr(hb, "_cmd_restart_kiosk", lambda: (restarts.append(1), (True, "ok"))[1])
     hb._apply_output_assignments({"DP-1": {"mode": "legacy_wall"}})
     assert not restarts   # identical -> no churn / no restart
+
+
+# ── Tier 4: per-output render health (which screen is wedged) ──────────────────
+
+def test_collect_output_health_reads_and_clamps(tmp_path, monkeypatch):
+    f = tmp_path / "output-health.json"
+    f.write_text(json.dumps({"ts": 1, "outputs": {
+        "DP-1": {"wedged": True, "reloads": 3, "title": "503 Service Temporarily Unavailable"},
+        "HDMI-A-1": {"wedged": False, "reloads": 0, "title": "Main Lobby — Beacon"},
+    }}), encoding="utf-8")
+    monkeypatch.setattr(hb, "_OUTPUT_HEALTH_PATH", f)
+    h = hb._collect_output_health()
+    assert h["DP-1"] == {"wedged": True, "reloads": 3,
+                         "title": "503 Service Temporarily Unavailable"}
+    assert h["HDMI-A-1"]["wedged"] is False
+
+
+def test_collect_output_health_missing_or_empty_is_none(tmp_path, monkeypatch):
+    monkeypatch.setattr(hb, "_OUTPUT_HEALTH_PATH", tmp_path / "nope.json")
+    assert hb._collect_output_health() is None
+    f = tmp_path / "empty.json"; f.write_text('{"outputs": {}}', encoding="utf-8")
+    monkeypatch.setattr(hb, "_OUTPUT_HEALTH_PATH", f)
+    assert hb._collect_output_health() is None
+
+
+def test_collect_output_health_bad_reloads_coerces(tmp_path, monkeypatch):
+    f = tmp_path / "h.json"
+    f.write_text(json.dumps({"outputs": {"DP-1": {"wedged": 1, "reloads": "x", "title": None}}}),
+                 encoding="utf-8")
+    monkeypatch.setattr(hb, "_OUTPUT_HEALTH_PATH", f)
+    h = hb._collect_output_health()
+    assert h["DP-1"]["reloads"] == 0 and h["DP-1"]["wedged"] is True and h["DP-1"]["title"] is None
+
+
+# ── Tier 4: watchdog state forwarding ─────────────────────────────────────────
+
+def test_collect_watchdog_state(tmp_path, monkeypatch):
+    f = tmp_path / "watchdog.json"
+    f.write_text(json.dumps({
+        "state": "degraded", "fail_streak": 3,
+        "checks": {"sway_running": True, "page_fresh": False},
+        "last_action": "restart_greetd", "hostname": "k",
+    }), encoding="utf-8")
+    monkeypatch.setattr(hb, "_WATCHDOG_STATE_PATH", f)
+    w = hb._collect_watchdog_state()
+    assert w["state"] == "degraded" and w["fail_streak"] == 3
+    assert w["checks"]["page_fresh"] is False and w["last_action"] == "restart_greetd"
+
+
+def test_collect_watchdog_state_missing_or_stateless_is_none(tmp_path, monkeypatch):
+    monkeypatch.setattr(hb, "_WATCHDOG_STATE_PATH", tmp_path / "nope.json")
+    assert hb._collect_watchdog_state() is None
+    f = tmp_path / "x.json"; f.write_text('{"fail_streak": 0}', encoding="utf-8")
+    monkeypatch.setattr(hb, "_WATCHDOG_STATE_PATH", f)
+    assert hb._collect_watchdog_state() is None   # no state -> None
