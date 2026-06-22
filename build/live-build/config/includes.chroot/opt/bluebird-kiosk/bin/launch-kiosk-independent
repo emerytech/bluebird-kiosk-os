@@ -12,10 +12,28 @@
 # Every screen goes through launch-kiosk-chromium, so each independently arms ?kiosk_cache=1
 # (the emergency takeover) + the local image cache. A reconcile loop relaunches a crashed
 # per-output Chromium / picks up a hotplug.
+#
+# PER-OUTPUT SELF-HEAL (multi-display): the global page-activity watchdog (services/watchdog.py)
+# can't tell WHICH of N displays is wedged — one healthy screen keeps the shared page-activity
+# freshness clock fresh and MASKS a sibling stuck on a server/browser error page (e.g. an nginx 503
+# caught during a backend deploy). So this loop also reads each output's Chromium window TITLE (which
+# is the page <title>) and, when it looks like an error page for KIOSK_WEDGED_THRESHOLD consecutive
+# checks, reloads ONLY that output's Chromium (launch-kiosk-chromium re-probes the URL and falls back
+# to the local renderer, so it can't re-stick on the 503). It also publishes per-output health for
+# the heartbeat / fleet console.
 set -u
 
 CONTENT=/var/lib/bluebird-kiosk/display-content.json
 LAUNCHER=/opt/bluebird-kiosk/bin/launch-kiosk-chromium
+HEALTH=/var/lib/bluebird-kiosk/output-health.json
+# Consecutive ~15s reconcile passes an output must read as an error page before we reload it. A
+# small debounce so a single mid-navigation frame never triggers a reload. Overridable for tests.
+WEDGED_THRESHOLD="${KIOSK_WEDGED_THRESHOLD:-2}"
+
+declare -A WEDGED_STREAK    # output -> consecutive "wedged" observation count
+declare -A WEDGED_RELOADS   # output -> times we've auto-reloaded it (surfaced in the fleet console)
+
+log() { printf 'independent: %s\n' "$*" >&2; }
 
 # con_ids of all current Chromium windows (one per line).
 _chromium_ids() {
@@ -39,6 +57,69 @@ except Exception: o={}
 print(o.get('$2',''))" 2>/dev/null
 }
 
+# Title of the Chromium window currently on <output>, or "" if none. The window title IS the page
+# <title>, so a stuck render reads e.g. '503 Service Temporarily Unavailable' vs '... Legacy Wall'.
+_output_title() {  # _output_title <output>
+  swaymsg -t get_tree 2>/dev/null | BB_TARGET="$1" python3 -c "
+import sys, json, os
+target = os.environ.get('BB_TARGET', '')
+def walk(n, out=None):
+    if n.get('type') == 'output':
+        out = n.get('name')
+    aid = (n.get('app_id') or '')
+    if out == target and 'chrom' in aid.lower() and n.get('pid'):
+        print((n.get('name') or '').strip()); return True
+    for c in (n.get('nodes') or []) + (n.get('floating_nodes') or []):
+        if walk(c, out): return True
+    return False
+try: walk(json.load(sys.stdin))
+except Exception: pass
+" 2>/dev/null
+}
+
+# Heuristic: does a window title look like a server / browser error page (NOT a real board)? Kept
+# to high-confidence signatures so a legitimately-named board (calendar events, etc.) never matches.
+_title_is_wedged() {  # _title_is_wedged <title>  -> rc 0 when it looks like an error page
+  local t; t=$(printf '%s' "${1:-}" | tr 'A-Z' 'a-z')
+  case "$t" in
+    *"service temporarily unavailable"*|*"bad gateway"*|*"gateway time-out"*|*"gateway timeout"*|\
+    *"internal server error"*|*"web server is down"*|*"web server returned an unknown error"*|\
+    *"connection timed out"*|*"this site can"*|*"no internet"*|*"took too long to respond"*|\
+    *"your connection is not private"*|*"err_"*)
+      return 0 ;;
+  esac
+  return 1
+}
+
+# Publish per-output render health for the heartbeat (Tier-4 fleet observability). Rows arrive on
+# stdin as: name<TAB>wedged(0/1)<TAB>reloads<TAB>title. Best-effort: never fails the loop.
+_publish_output_health() {
+  python3 -c "
+import sys, json, os, time, tempfile
+out = {}
+for line in sys.stdin:
+    parts = line.rstrip('\n').split('\t', 3)
+    if len(parts) < 4:
+        continue
+    name, wedged, reloads, title = parts
+    if not name:
+        continue
+    try: rl = int(reloads)
+    except ValueError: rl = 0
+    out[name[:64]] = {'wedged': wedged == '1', 'reloads': rl, 'title': title[:120]}
+path = '$HEALTH'
+try:
+    d = os.path.dirname(path)
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=d, suffix='.tmp')
+    with os.fdopen(fd, 'w') as fh:
+        fh.write(json.dumps({'ts': int(time.time()), 'outputs': out}))
+    os.replace(tmp, path)
+except OSError:
+    pass
+" 2>/dev/null
+}
+
 _map_touch() {
   # Map the touchscreen to the Legacy-Wall output. In side-by-side (independent) mode sway
   # otherwise spreads touch across the whole desktop, so taps on the built-in panel land on the
@@ -59,7 +140,8 @@ else:
 }
 
 reconcile() {
-  local names name safe profile mode url before after new i
+  local names name safe profile mode url before after new i title wflag
+  local -a health_rows=()
   names=$(swaymsg -t get_outputs 2>/dev/null | python3 -c "import sys,json
 try: d=json.load(sys.stdin)
 except Exception: d=[]
@@ -67,6 +149,28 @@ except Exception: d=[]
   for name in $names; do
     safe=$(printf '%s' "$name" | tr -c 'A-Za-z0-9' '_')
     profile="/var/lib/bluebird-kiosk/kiosk-chromium-$safe"
+
+    # ── Per-output wedged-page self-heal (only meaningful when a Chromium exists for this output) ──
+    title=""
+    if pgrep -f -- "--user-data-dir=$profile" >/dev/null 2>&1; then
+      title=$(_output_title "$name")
+      if [[ -n "$title" ]] && _title_is_wedged "$title"; then
+        WEDGED_STREAK[$name]=$(( ${WEDGED_STREAK[$name]:-0} + 1 ))
+        log "output $name wedged (\"$title\") streak=${WEDGED_STREAK[$name]:-0}/$WEDGED_THRESHOLD"
+        if (( ${WEDGED_STREAK[$name]:-0} >= WEDGED_THRESHOLD )); then
+          log "reloading wedged output $name"
+          pkill -f -- "--user-data-dir=$profile" >/dev/null 2>&1 || true
+          WEDGED_STREAK[$name]=0
+          WEDGED_RELOADS[$name]=$(( ${WEDGED_RELOADS[$name]:-0} + 1 ))
+        fi
+      else
+        WEDGED_STREAK[$name]=0
+      fi
+    fi
+    wflag=0; [[ ${WEDGED_STREAK[$name]:-0} -gt 0 ]] && wflag=1
+    health_rows+=("$(printf '%s\t%s\t%s\t%s' "$name" "$wflag" "${WEDGED_RELOADS[$name]:-0}" "$title")")
+
+    # ── (Re)launch when there's no Chromium for this output (crash, hotplug, or the wedged-kill) ──
     if pgrep -f -- "--user-data-dir=$profile" >/dev/null 2>&1; then
       continue   # already a Chromium for this output
     fi
@@ -93,10 +197,14 @@ except Exception: d=[]
       swaymsg "[con_id=$new] fullscreen enable" >/dev/null 2>&1 || true
     fi
   done
+  (( ${#health_rows[@]} )) && printf '%s\n' "${health_rows[@]}" | _publish_output_health
   _map_touch   # keep the touchscreen pinned to its (Legacy Wall) output
 }
 
-while true; do
-  reconcile
-  sleep 15
-done
+# Run the reconcile loop only when executed directly; sourcing (tests) just loads the functions.
+if [[ "${BASH_SOURCE[0]:-}" == "${0}" ]]; then
+  while true; do
+    reconcile
+    sleep 15
+  done
+fi

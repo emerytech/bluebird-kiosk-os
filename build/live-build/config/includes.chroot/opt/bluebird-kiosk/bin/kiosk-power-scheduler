@@ -159,9 +159,47 @@ def _desired_on(schedule: dict) -> bool:
     return on_min <= cur < off_min
 
 
+def _socket_pid(path: str) -> "int | None":
+    """Extract the pid from a sway-ipc.<uid>.<pid>.sock path, or None if unparseable."""
+    try:
+        return int(path.rsplit(".sock", 1)[0].rsplit(".", 1)[1])
+    except (ValueError, IndexError):
+        return None
+
+
+def _pid_is_sway(pid: "int | None") -> bool:
+    """True iff <pid> is a live `sway` process (the compositor, not a swaybar/bg child)."""
+    if not pid:
+        return False
+    try:
+        return Path("/proc/%d/comm" % pid).read_text().strip() == "sway"
+    except OSError:
+        return False
+
+
 def _sway_socket(uid: int) -> "str | None":
-    socks = sorted(glob.glob("/run/user/%d/sway-ipc.%d.*.sock" % (uid, uid)))
-    return socks[0] if socks else None
+    """Return the LIVE sway IPC socket for uid.
+
+    bluebird-kiosk.service restarts sway at least once at boot (the greetd
+    conflict dance), leaving a stale sway-ipc.<uid>.<oldpid>.sock behind. The
+    old code did `sorted(globs)[0]`, which picks the LEXICALLY-first name — i.e.
+    the OLDEST/dead socket (…1465.sock < …2507.sock) — so every `dpms on/off`
+    failed with 'Unable to connect' for the rest of uptime and scheduled display
+    power on/off silently broke. Prefer the socket whose embedded pid is a live
+    `sway` process; if none maps to a live sway (race), fall back to newest mtime."""
+    socks = glob.glob("/run/user/%d/sway-ipc.%d.*.sock" % (uid, uid))
+    if not socks:
+        return None
+    live = [s for s in socks if _pid_is_sway(_socket_pid(s))]
+    pool = live or socks
+
+    def _mtime(path: str) -> float:
+        try:
+            return Path(path).stat().st_mtime
+        except OSError:
+            return 0.0
+
+    return max(pool, key=_mtime)
 
 
 def _apply(state_on: bool) -> None:
