@@ -64,4 +64,28 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd iso-builder/dist
-          gh release upload "${GITHUB_REF_NAME}" *.iso *.sha256 --clobber
+          iso="$(ls *.iso)"
+          # GitHub release assets are hard-capped at 2 GiB, and the stock Ubuntu Server base ISO is
+          # already ~2.6 GB, so a single-file upload 422s ("size must be less than 2147483648") and
+          # the whole tag build goes red. Split anything over the cap into <2 GiB parts + ship a
+          # reassembly note; the .sha256 (of the WHOLE iso) verifies the rejoined file. Small ISOs
+          # still upload as a single asset.
+          limit=$((2000 * 1024 * 1024))   # 2000 MiB — safely under the 2 GiB hard cap
+          size="$(stat -c%s "$iso")"
+          if [ "$size" -gt "$limit" ]; then
+            echo "ISO is ${size} bytes (> GitHub's 2 GiB asset cap) — splitting into 1900 MiB parts"
+            split -b 1900M -d -a 2 --additional-suffix=.part "$iso" "${iso}."
+            printf '%s\n' \
+              "The BlueBird Kiosk OS autoinstall ISO is larger than GitHub's 2 GiB per-asset limit," \
+              "so it is published here as split parts. To rebuild and verify it:" \
+              "" \
+              "    cat ${iso}.*.part > ${iso}" \
+              "    sha256sum -c ${iso}.sha256" \
+              "" \
+              "Then flash ${iso} to a USB stick (dd / Rufus / balenaEtcher)." \
+              > REASSEMBLE.txt
+            gh release upload "${GITHUB_REF_NAME}" "${iso}".*.part *.sha256 REASSEMBLE.txt --clobber
+            echo "uploaded $(ls "${iso}".*.part | wc -l) ISO parts + checksum + REASSEMBLE.txt"
+          else
+            gh release upload "${GITHUB_REF_NAME}" "$iso" *.sha256 --clobber
+          fi
