@@ -4,17 +4,23 @@
 # cream Legacy Wall crest (blue keyed out so it floats and the glow shows
 # through the engraving), and a row of gently-pulsing loader dots.
 #
-# Animations, all on the ~50Hz refresh callback, using only portable
-# Plymouth-script features (counters + if; no Math lib, modulo, or arrays):
-#   - everything fades in over ~0.7s
-#   - the crest settles upward a few px as it fades in
-#   - the bloom "breathes" (slow triangle wave)
-#   - the dots pulse in a staggered wave
+# MULTI-MONITOR (fixed 2026-06-22, measured on NEN's DP-1+HDMI kiosk):
+#   - The original used the NO-ARG Window.GetWidth()/GetX(), which return canvas-level
+#     dimensions; at shutdown that pushed the crest off-screen on both panels.
+#   - Plymouth reports the active panel as WINDOW 0 with INDEXED geometry — e.g. 1920x1080
+#     positioned at (960,540) inside a larger canvas — and Window.GetX(0)+GetWidth(0)/2 lands
+#     exactly at the panel's physical centre (verified with an on-screen center marker).
+#   - The window COUNT is unstable across shutdowns (sometimes 1, sometimes 2 overlapping
+#     clones), so a per-window loop drew a DOUBLED crest. We therefore draw the crest exactly
+#     ONCE, using window-0's indexed geometry: correct centre + never doubled.
+#
+# Animations run on the ~50Hz refresh callback, portable Plymouth-script only (counters + if).
 
-sw = Window.GetWidth();
-sh = Window.GetHeight();
-ox = Window.GetX();
-oy = Window.GetY();
+# Window-0 INDEXED geometry (NOT the no-arg form — that returns canvas dims and mis-centres).
+sw = Window.GetWidth (0);
+sh = Window.GetHeight (0);
+ox = Window.GetX (0);
+oy = Window.GetY (0);
 
 # Fallback colour for the instant before the image maps (deep navy, not flat brand-blue).
 Window.SetBackgroundTopColor    (0.020, 0.027, 0.055);
