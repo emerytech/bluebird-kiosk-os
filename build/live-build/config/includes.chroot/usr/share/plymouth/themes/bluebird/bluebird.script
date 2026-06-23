@@ -4,93 +4,83 @@
 # cream Legacy Wall crest (blue keyed out so it floats and the glow shows
 # through the engraving), and a row of gently-pulsing loader dots.
 #
-# MULTI-MONITOR (fixed 2026-06-22): the crest/glow/dots are drawn centered on
-# EVERY connected output, each using that output's own geometry. The previous
-# version positioned a single set of sprites off window 0 only — at SHUTDOWN
-# both monitors are live in a lopsided layout (e.g. DP-1 1920x1080 @ x=0 + HDMI
-# 3840x2160 @ x=1920), so window-0's geometry pushed the crest into a region
-# neither panel could show centered and it vanished off both screens. Iterating
-# Window.GetWidth(i) and centering per-window is correct at boot (one window) and
-# shutdown (two+). Sprite coordinates are global; anchoring each sprite inside its
-# own monitor's rect (ox,oy,sw,sh) lands it on-screen on that monitor.
+# MULTI-MONITOR (fixed 2026-06-22, measured on NEN's DP-1+HDMI kiosk):
+#   - The original used the NO-ARG Window.GetWidth()/GetX(), which return canvas-level
+#     dimensions; at shutdown that pushed the crest off-screen on both panels.
+#   - Plymouth reports the active panel as WINDOW 0 with INDEXED geometry — e.g. 1920x1080
+#     positioned at (960,540) inside a larger canvas — and Window.GetX(0)+GetWidth(0)/2 lands
+#     exactly at the panel's physical centre (verified with an on-screen center marker).
+#   - The window COUNT is unstable across shutdowns (sometimes 1, sometimes 2 overlapping
+#     clones), so a per-window loop drew a DOUBLED crest. We therefore draw the crest exactly
+#     ONCE, using window-0's indexed geometry: correct centre + never doubled.
 #
-# Animations run on the ~50Hz refresh callback, portable Plymouth-script only
-# (counters + if + for). Animation state (fade/glow/dot phases) is shared so all
-# monitors pulse in sync. Indexed sprite arrays (bg_sprite[i], em_sprite[i], ...)
-# are the standard Plymouth multi-monitor idiom.
+# Animations run on the ~50Hz refresh callback, portable Plymouth-script only (counters + if).
+
+# Window-0 INDEXED geometry (NOT the no-arg form — that returns canvas dims and mis-centres).
+sw = Window.GetWidth (0);
+sh = Window.GetHeight (0);
+ox = Window.GetX (0);
+oy = Window.GetY (0);
 
 # Fallback colour for the instant before the image maps (deep navy, not flat brand-blue).
 Window.SetBackgroundTopColor    (0.020, 0.027, 0.055);
 Window.SetBackgroundBottomColor (0.012, 0.016, 0.035);
 
-bg_image  = Image ("background.png");
-em_image  = Image ("emblem.png");
-gl_image  = Image ("glow.png");
-dot_image = Image ("dot.png");
+# -- Background: full-screen navy radial glow --
+bg.image  = Image ("background.png");
+bg.scaled = bg.image.Scale (sw, sh);
+bg.sprite = Sprite (bg.scaled);
+bg.sprite.SetX (ox);
+bg.sprite.SetY (oy);
+bg.sprite.SetZ (0);
+bg.sprite.SetOpacity (0);
 
-# -- Build the full splash on each monitor, centered on its own geometry --
-# The `i < 8` cap is a safety bound: should a Plymouth build ever ignore the window
-# index and return window-0's width for every i, the loop still terminates (it would
-# just draw a few harmless overlapping copies) instead of spinning forever at load.
-num_windows = 0;
-for (i = 0; i < 8 && Window.GetWidth (i) > 0; i++) {
-    sw = Window.GetWidth (i);
-    sh = Window.GetHeight (i);
-    ox = Window.GetX (i);
-    oy = Window.GetY (i);
+# -- Crest: cream emblem, ~30% screen width, centred a touch high --
+em.image = Image ("emblem.png");
+em_w  = sw * 0.30;
+em_sc = em_w / em.image.GetWidth ();
+em.scaled = em.image.Scale (em.image.GetWidth () * em_sc, em.image.GetHeight () * em_sc);
+em.sprite = Sprite (em.scaled);
+em_x = ox + (sw - em.scaled.GetWidth ()) / 2;
+em_base_y = oy + (sh - em.scaled.GetHeight ()) / 2 - sh * 0.04;
+em.sprite.SetX (em_x);
+em.sprite.SetY (em_base_y);
+em.sprite.SetZ (10);
+em.sprite.SetOpacity (0);
 
-    # Background: navy radial glow scaled to THIS monitor.
-    bg_sprite[i] = Sprite (bg_image.Scale (sw, sh));
-    bg_sprite[i].SetX (ox);
-    bg_sprite[i].SetY (oy);
-    bg_sprite[i].SetZ (0);
-    bg_sprite[i].SetOpacity (0);
+# -- Bloom: soft blue glow behind the crest, breathing --
+gl.image = Image ("glow.png");
+gl_w  = em.scaled.GetWidth () * 1.55;
+gl_sc = gl_w / gl.image.GetWidth ();
+gl.scaled = gl.image.Scale (gl.image.GetWidth () * gl_sc, gl.image.GetHeight () * gl_sc);
+gl.sprite = Sprite (gl.scaled);
+em_cx = em_x + em.scaled.GetWidth () / 2;
+em_cy = em_base_y + em.scaled.GetHeight () / 2;
+gl.sprite.SetX (em_cx - gl.scaled.GetWidth () / 2);
+gl.sprite.SetY (em_cy - gl.scaled.GetHeight () / 2);
+gl.sprite.SetZ (5);
+gl.sprite.SetOpacity (0);
 
-    # Crest: cream emblem, ~30% monitor width, centred a touch high.
-    em_w  = sw * 0.30;
-    em_sc = em_w / em_image.GetWidth ();
-    em_scaled = em_image.Scale (em_image.GetWidth () * em_sc, em_image.GetHeight () * em_sc);
-    emw = em_scaled.GetWidth ();
-    emh = em_scaled.GetHeight ();
-    em_sprite[i] = Sprite (em_scaled);
-    em_x[i]     = ox + (sw - emw) / 2;
-    em_basey[i] = oy + (sh - emh) / 2 - sh * 0.04;
-    em_settle[i] = sh * 0.022;
-    em_sprite[i].SetX (em_x[i]);
-    em_sprite[i].SetY (em_basey[i]);
-    em_sprite[i].SetZ (10);
-    em_sprite[i].SetOpacity (0);
+# -- Loader dots: five, centred low, staggered pulse --
+dot.image = Image ("dot.png");
+dot_d  = sw * 0.010;
+dot_sc = dot_d / dot.image.GetWidth ();
+dot.scaled = dot.image.Scale (dot.image.GetWidth () * dot_sc, dot.image.GetHeight () * dot_sc);
+dot_gap = dot_d * 2.0;
+dots_total = dot_gap * 4;
+dots_left = ox + (sw - dots_total) / 2 - dot.scaled.GetWidth () / 2;
+dots_y = oy + sh * 0.80;
 
-    # Bloom: soft blue glow behind the crest, breathing.
-    gl_w  = emw * 1.55;
-    gl_sc = gl_w / gl_image.GetWidth ();
-    gl_scaled = gl_image.Scale (gl_image.GetWidth () * gl_sc, gl_image.GetHeight () * gl_sc);
-    gl_sprite[i] = Sprite (gl_scaled);
-    gl_sprite[i].SetX (em_x[i] + emw / 2 - gl_scaled.GetWidth () / 2);
-    gl_sprite[i].SetY (em_basey[i] + emh / 2 - gl_scaled.GetHeight () / 2);
-    gl_sprite[i].SetZ (5);
-    gl_sprite[i].SetOpacity (0);
+d0.sprite = Sprite (dot.scaled); d0.sprite.SetX (dots_left + dot_gap*0); d0.sprite.SetY (dots_y); d0.sprite.SetZ (8); d0.sprite.SetOpacity (0);
+d1.sprite = Sprite (dot.scaled); d1.sprite.SetX (dots_left + dot_gap*1); d1.sprite.SetY (dots_y); d1.sprite.SetZ (8); d1.sprite.SetOpacity (0);
+d2.sprite = Sprite (dot.scaled); d2.sprite.SetX (dots_left + dot_gap*2); d2.sprite.SetY (dots_y); d2.sprite.SetZ (8); d2.sprite.SetOpacity (0);
+d3.sprite = Sprite (dot.scaled); d3.sprite.SetX (dots_left + dot_gap*3); d3.sprite.SetY (dots_y); d3.sprite.SetZ (8); d3.sprite.SetOpacity (0);
+d4.sprite = Sprite (dot.scaled); d4.sprite.SetX (dots_left + dot_gap*4); d4.sprite.SetY (dots_y); d4.sprite.SetZ (8); d4.sprite.SetOpacity (0);
 
-    # Loader dots: five, centred low, staggered pulse.
-    dot_d  = sw * 0.010;
-    dot_sc = dot_d / dot_image.GetWidth ();
-    dot_scaled = dot_image.Scale (dot_image.GetWidth () * dot_sc, dot_image.GetHeight () * dot_sc);
-    dot_gap = dot_d * 2.0;
-    dots_left = ox + (sw - dot_gap * 4) / 2 - dot_scaled.GetWidth () / 2;
-    dots_y = oy + sh * 0.80;
-
-    d0_sprite[i] = Sprite (dot_scaled); d0_sprite[i].SetX (dots_left + dot_gap*0); d0_sprite[i].SetY (dots_y); d0_sprite[i].SetZ (8); d0_sprite[i].SetOpacity (0);
-    d1_sprite[i] = Sprite (dot_scaled); d1_sprite[i].SetX (dots_left + dot_gap*1); d1_sprite[i].SetY (dots_y); d1_sprite[i].SetZ (8); d1_sprite[i].SetOpacity (0);
-    d2_sprite[i] = Sprite (dot_scaled); d2_sprite[i].SetX (dots_left + dot_gap*2); d2_sprite[i].SetY (dots_y); d2_sprite[i].SetZ (8); d2_sprite[i].SetOpacity (0);
-    d3_sprite[i] = Sprite (dot_scaled); d3_sprite[i].SetX (dots_left + dot_gap*3); d3_sprite[i].SetY (dots_y); d3_sprite[i].SetZ (8); d3_sprite[i].SetOpacity (0);
-    d4_sprite[i] = Sprite (dot_scaled); d4_sprite[i].SetX (dots_left + dot_gap*4); d4_sprite[i].SetY (dots_y); d4_sprite[i].SetZ (8); d4_sprite[i].SetOpacity (0);
-
-    num_windows++;
-}
-
-# -- Shared animation state (all monitors pulse in sync) --
+# -- Animation state --
 tick = 0;
 fade_total = 35;
+settle_px  = sh * 0.022;
 
 glow_phase  = 0;
 glow_period = 170;
@@ -114,46 +104,31 @@ fun refresh () {
     f = tick / fade_total;
     if (f > 1) { f = 1; }
 
+    bg.sprite.SetOpacity (f);
+    em.sprite.SetOpacity (f);
+    em.sprite.SetY (em_base_y + settle_px * (1 - f));
+
     glow_phase++;
     if (glow_phase >= glow_period) { glow_phase = 0; }
     gb = 0.55 + 0.45 * tri (glow_phase, glow_period);
+    gl.sprite.SetOpacity (gb * f);
 
     d0_phase++; if (d0_phase >= dot_period) { d0_phase = 0; }
     d1_phase++; if (d1_phase >= dot_period) { d1_phase = 0; }
     d2_phase++; if (d2_phase >= dot_period) { d2_phase = 0; }
     d3_phase++; if (d3_phase >= dot_period) { d3_phase = 0; }
     d4_phase++; if (d4_phase >= dot_period) { d4_phase = 0; }
-
     db = 0.20;
     da = 0.80;
-    o0 = (db + da * tri (d0_phase, dot_period)) * f;
-    o1 = (db + da * tri (d1_phase, dot_period)) * f;
-    o2 = (db + da * tri (d2_phase, dot_period)) * f;
-    o3 = (db + da * tri (d3_phase, dot_period)) * f;
-    o4 = (db + da * tri (d4_phase, dot_period)) * f;
-
-    # Animate every monitor's sprite set in lock-step.
-    for (i = 0; i < num_windows; i++) {
-        bg_sprite[i].SetOpacity (f);
-        em_sprite[i].SetOpacity (f);
-        em_sprite[i].SetY (em_basey[i] + em_settle[i] * (1 - f));
-        gl_sprite[i].SetOpacity (gb * f);
-        d0_sprite[i].SetOpacity (o0);
-        d1_sprite[i].SetOpacity (o1);
-        d2_sprite[i].SetOpacity (o2);
-        d3_sprite[i].SetOpacity (o3);
-        d4_sprite[i].SetOpacity (o4);
-    }
+    d0.sprite.SetOpacity ((db + da * tri (d0_phase, dot_period)) * f);
+    d1.sprite.SetOpacity ((db + da * tri (d1_phase, dot_period)) * f);
+    d2.sprite.SetOpacity ((db + da * tri (d2_phase, dot_period)) * f);
+    d3.sprite.SetOpacity ((db + da * tri (d3_phase, dot_period)) * f);
+    d4.sprite.SetOpacity ((db + da * tri (d4_phase, dot_period)) * f);
 }
 Plymouth.SetRefreshFunction (refresh);
 
 # -- Boot / prompt / shutdown callbacks --
-# Prompt (LUKS password / questions) anchored low-centre on window 0.
-p_sw = Window.GetWidth (0);
-p_sh = Window.GetHeight (0);
-p_ox = Window.GetX (0);
-p_oy = Window.GetY (0);
-
 prompt.sprite = Sprite ();
 prompt.sprite.SetZ (20);
 
@@ -163,15 +138,15 @@ fun display_normal_callback () {
 fun display_password_callback (prompt_text, bullets) {
     img = Image.Text (prompt_text + "  " + bullets, 0.88, 0.92, 1.0);
     prompt.sprite.SetImage (img);
-    prompt.sprite.SetX (p_ox + (p_sw - img.GetWidth ()) / 2);
-    prompt.sprite.SetY (p_oy + p_sh * 0.88);
+    prompt.sprite.SetX (ox + (sw - img.GetWidth ()) / 2);
+    prompt.sprite.SetY (oy + sh * 0.88);
     prompt.sprite.SetOpacity (1);
 }
 fun display_question_callback (prompt_text, entry) {
     img = Image.Text (prompt_text + "  " + entry, 0.88, 0.92, 1.0);
     prompt.sprite.SetImage (img);
-    prompt.sprite.SetX (p_ox + (p_sw - img.GetWidth ()) / 2);
-    prompt.sprite.SetY (p_oy + p_sh * 0.88);
+    prompt.sprite.SetX (ox + (sw - img.GetWidth ()) / 2);
+    prompt.sprite.SetY (oy + sh * 0.88);
     prompt.sprite.SetOpacity (1);
 }
 fun display_message_callback (text) { }
