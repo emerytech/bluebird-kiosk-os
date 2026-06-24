@@ -130,8 +130,8 @@ unattended-upgrades ca-certificates git rsync openssh-server"
       apt-get update -qq
       # Recursive closure → real package names (drop indented Depends: lines and
       # <virtual> entries apt-get download cannot fetch).
-      # Keep Depends + Pre-Depends (hard requirements); drop the rest. --no-install-recommends
-      # at install time means Recommends aren't needed in the pool.
+      # Keep Depends + Pre-Depends (hard requirements); drop the rest. With
+      # --no-install-recommends at install time, Recommends are not needed here.
       DEPS=$(apt-cache depends --recurse --no-recommends --no-suggests --no-conflicts \
                --no-breaks --no-replaces --no-enhances $KIOSK_PKGS \
              | grep "^[a-zA-Z0-9]" | sort -u)
