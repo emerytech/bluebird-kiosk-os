@@ -1,0 +1,130 @@
+#cloud-config
+# BlueBird Kiosk OS — Ubuntu 24.04 Server autoinstall config (OFFLINE variant).
+#
+# Built into the ISO by `OFFLINE=1 ./build-iso.sh`, which ALSO bakes onto the
+# media:
+#   /cdrom/bluebird/kiosk-os/   — the kiosk-os repo tree (install.sh runs here)
+#   /cdrom/bluebird/pool/       — a self-contained apt pool (every .deb the
+#                                 kiosk needs incl. xtradeb chromium + firmware)
+#
+# Unlike the online user-data, this needs NO network at any point:
+#   - Subiquity installs the Ubuntu base from the ISO's own pool (always offline)
+#   - The late-commands install the kiosk stack from /cdrom/bluebird/pool
+#   - WiFi is configured later by the firstboot wizard (slug → PIN → enroll),
+#     which is the first thing that actually needs the network.
+#
+# Default credentials baked into the image (override post-install if needed):
+#   username:  bluebird
+#   password:  bluebird2026!!
+
+autoinstall:
+  version: 1
+
+  # NO interactive-sections — a fully offline install needs no operator network
+  # input. Subiquity tries DHCP, and a no-network result is fine: it proceeds.
+  # (Firstboot handles WiFi after the first reboot.)
+
+  # Pre-storage cleanup — runs in the installer environment BEFORE Subiquity
+  # discovers block devices. Zaps every partition table on every non-removable
+  # disk so a hibernated-NTFS / dirty-GPT disk can't hang the storage probe.
+  # (Same logic as the online user-data — see its comments for the field report.)
+  early-commands:
+    - |
+      set -e
+      for dev in /sys/block/sd* /sys/block/nvme*n* /sys/block/mmcblk* /sys/block/vd*; do
+        [ -d "$dev" ] || continue
+        name="$(basename "$dev")"
+        if [ "$(cat "$dev/removable" 2>/dev/null || echo 1)" = "1" ]; then
+          echo "skip removable /dev/$name"
+          continue
+        fi
+        echo "wiping /dev/$name (pre-Subiquity)"
+        umount -A --recursive "/dev/$name"* 2>/dev/null || true
+        swapoff -a 2>/dev/null || true
+        wipefs -af "/dev/$name" 2>/dev/null || true
+        sgdisk --zap-all "/dev/$name" 2>/dev/null || true
+        dd if=/dev/zero of="/dev/$name" bs=1M count=10 conv=fsync 2>/dev/null || true
+      done
+      partprobe 2>/dev/null || true
+      udevadm settle --timeout=10 || true
+
+  identity:
+    hostname: bluebird-kiosk
+    username: bluebird
+    realname: BlueBird Kiosk Operator
+    # SHA-512 crypt hash of "bluebird2026!!".
+    password: "$6$BlueBirdKi$mv2EW78jM3GnTRLICXJ4P04DQ8JeXYno9xlNduq5I0Iuqy7y66p8KRuwOEjiHbismPDBuURA0upUpv6vfokew0"
+
+  locale: en_US.UTF-8
+  keyboard:
+    layout: us
+
+  # Geoip timezone needs network; offline it silently falls back to UTC. The
+  # firstboot wizard / NTP corrects the clock once WiFi is up.
+  timezone: geoip
+
+  # Wipe the first internal disk; `direct` skips LVM (no snapshots needed).
+  storage:
+    layout:
+      name: direct
+
+  ssh:
+    install-server: true
+    allow-pw: true
+    authorized-keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINBeS9ym07a9bKo8GDs31wyDQFduWhML4GXHzanzLX0i bluebird-kiosk-claude-20260514
+
+  # Installed by Subiquity from the ISO's own pool (offline). The kiosk stack
+  # itself comes from /cdrom/bluebird/pool in the late-commands below.
+  packages:
+    - curl
+    - ca-certificates
+    - git
+    - sudo
+    - openssh-server
+
+  snaps: []
+
+  refresh-installer:
+    update: false
+
+  # ── Offline kiosk bootstrap — everything is on the ISO; no network needed. ──
+  late-commands:
+    # 1) Copy the kiosk-os tree + the bundled apt pool into the target. install.sh
+    #    auto-detects KIOSK_OS from its own path: /root/kiosk-os/install/install.sh
+    #    → REPO_ROOT=/root, KIOSK_OS=/root/kiosk-os.
+    - cp -a /cdrom/bluebird/kiosk-os /target/root/kiosk-os
+    - cp -a /cdrom/bluebird/pool /target/opt/bluebird-pool
+    # 2) Point the target's apt at ONLY the local pool for the bootstrap. Stash
+    #    the online sources so apt resolves entirely offline, then restore them in
+    #    step 4 so unattended-upgrades works once firstboot brings up WiFi.
+    - |
+      set -e
+      stash=/target/etc/apt/sources.list.d/.bb-online-stash
+      mkdir -p "$stash"
+      [ -f /target/etc/apt/sources.list ] && mv /target/etc/apt/sources.list "$stash/sources.list" || true
+      for f in /target/etc/apt/sources.list.d/*.sources /target/etc/apt/sources.list.d/*.list; do
+        [ -e "$f" ] || continue
+        case "$f" in *".bb-online-stash"*) continue;; esac
+        mv "$f" "$stash/"
+      done
+      echo 'deb [trusted=yes] file:///opt/bluebird-pool ./' > /target/etc/apt/sources.list.d/bluebird-offline.list
+    # 3) Run the kiosk installer offline, inside the target chroot. `|| true` so a
+    #    partial failure doesn't abort the whole autoinstall (re-runnable by hand).
+    - 'curtin in-target --target=/target -- env KIOSK_OFFLINE=1 KIOSK_OFFLINE_POOL=/opt/bluebird-pool bash /root/kiosk-os/install/install.sh || true'
+    # 4) Restore the online apt sources + reclaim the (large) pool's disk space.
+    - |
+      set -e
+      stash=/target/etc/apt/sources.list.d/.bb-online-stash
+      rm -f /target/etc/apt/sources.list.d/bluebird-offline.list
+      if [ -d "$stash" ]; then
+        [ -f "$stash/sources.list" ] && mv "$stash/sources.list" /target/etc/apt/sources.list || true
+        for f in "$stash"/*; do
+          [ -e "$f" ] || continue
+          mv "$f" /target/etc/apt/sources.list.d/
+        done
+        rmdir "$stash" 2>/dev/null || true
+      fi
+      rm -rf /target/opt/bluebird-pool
+
+  shutdown: reboot

@@ -1,0 +1,98 @@
+name: Build Offline ISO
+
+# Fully-offline autoinstall ISO: bakes a self-contained apt pool (every .deb the
+# kiosk needs, incl. xtradeb chromium + linux-firmware) + the kiosk-os tree onto
+# the image, so the install needs NO network (firstboot still handles WiFi).
+#
+# Cut a tag matching `offline-iso-*` (e.g. `offline-iso-2026-06-24`) → the ISO
+# (split into <2 GiB parts, since the pool pushes it past GitHub's asset cap)
+# lands as release assets. Also runnable on-demand from the Actions tab.
+on:
+  push:
+    tags:
+      - 'offline-iso-*'
+  workflow_dispatch:
+    inputs:
+      ubuntu_version:
+        description: 'Ubuntu point release (e.g. 24.04.1)'
+        default: '24.04.1'
+        required: true
+
+permissions:
+  contents: write   # release events need to upload assets
+
+jobs:
+  build:
+    name: Build BlueBird Kiosk OS offline ISO
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Install xorriso + tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xorriso \
+            wget \
+            ca-certificates
+          # docker is preinstalled on ubuntu-latest (used for clean-room .deb gathering)
+          docker --version
+
+      - name: Cache stock Ubuntu Server ISO
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/bluebird-kiosk-os
+          key: ubuntu-server-iso-${{ github.event.inputs.ubuntu_version || '24.04.1' }}
+          restore-keys: |
+            ubuntu-server-iso-
+
+      - name: Build offline ISO
+        env:
+          UBUNTU_VERSION: ${{ github.event.inputs.ubuntu_version || '24.04.1' }}
+          OFFLINE: '1'
+        run: |
+          cd iso-builder
+          ./build-iso.sh
+
+      - name: Upload ISO as build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bluebird-kiosk-offline-iso
+          path: |
+            iso-builder/dist/*.iso
+            iso-builder/dist/*.sha256
+          retention-days: 30
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd iso-builder/dist
+          iso="$(ls *.iso)"
+          # GitHub release assets are hard-capped at 2 GiB, and the offline ISO
+          # (base + apt pool) is ~3+ GB, so split into <2 GiB parts + ship a
+          # reassembly note; the .sha256 (of the WHOLE iso) verifies the rejoin.
+          limit=$((2000 * 1024 * 1024))   # 2000 MiB — safely under the 2 GiB cap
+          size="$(stat -c%s "$iso")"
+          if [ "$size" -gt "$limit" ]; then
+            echo "ISO is ${size} bytes (> GitHub's 2 GiB asset cap) — splitting into 1900 MiB parts"
+            split -b 1900M -d -a 2 --additional-suffix=.part "$iso" "${iso}."
+            printf '%s\n' \
+              "The BlueBird Kiosk OS OFFLINE autoinstall ISO is larger than GitHub's 2 GiB" \
+              "per-asset limit, so it is published here as split parts. To rebuild + verify:" \
+              "" \
+              "    cat ${iso}.*.part > ${iso}" \
+              "    sha256sum -c ${iso}.sha256" \
+              "" \
+              "Then flash ${iso} to a USB stick (dd / Rufus / balenaEtcher). The install" \
+              "needs NO network; WiFi is configured by the firstboot wizard after reboot." \
+              > REASSEMBLE.txt
+            gh release upload "${GITHUB_REF_NAME}" "${iso}".*.part *.sha256 REASSEMBLE.txt --clobber
+            echo "uploaded $(ls "${iso}".*.part | wc -l) ISO parts + checksum + REASSEMBLE.txt"
+          else
+            gh release upload "${GITHUB_REF_NAME}" "$iso" *.sha256 --clobber
+          fi
