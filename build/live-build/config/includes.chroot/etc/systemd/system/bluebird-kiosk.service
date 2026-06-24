@@ -3,12 +3,17 @@ Description=BlueBird Legacy Wall kiosk (sway + chromium fullscreen) — STANDBY
 After=bluebird-admin.service network-online.target
 Wants=bluebird-admin.service network-online.target
 ConditionPathExists=/etc/bluebird/configured
-# Mutual exclusion with greetd — they both want to own VT1 and the DRM
-# seat. greetd is the canonical session owner; if it's active, we MUST
-# stay out of its way or we crash-loop fighting for the seat (observed
-# 2026-06-04: 15 restart-counter increments in <60s).
-Conflicts=greetd.service
-After=greetd.service
+# Mutual exclusion with greetd is by CONDITION, not Conflicts=. greetd owns the session ONLY
+# until the kiosk is configured (first boot → firstboot wizard); a drop-in gives greetd a
+# matching ConditionPathExists=!/etc/bluebird/configured. Once /etc/bluebird/configured exists,
+# greetd is condition-skipped and THIS unit owns the session (sway directly). They can never both
+# be active — the marker is either present or absent — so no seat-fight (the crash-loop a
+# Conflicts= was meant to avoid; observed 2026-06-04, 15 restart increments in <60s).
+#
+# Why NOT Conflicts=greetd here: bluebird-gesture.service Wants= this unit (the only thing that
+# pulls a no-[Install] standby into the boot), so on a FRESH/un-configured install Conflicts=greetd
+# dropped greetd from the boot transaction, then THIS unit was condition-skipped — leaving NO
+# compositor and the box stuck at a text console. Condition-based exclusion fixes that.
 
 [Service]
 Type=simple
