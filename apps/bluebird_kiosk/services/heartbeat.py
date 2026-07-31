@@ -291,6 +291,63 @@ def _cmd_check_update() -> Tuple[bool, str]:
     return _run_systemctl(["start", "--no-block", "bluebird-update.service"])
 
 
+_ACCESS_HANDOFF = Path("/var/lib/bluebird-kiosk/access-reset.json")
+
+
+def _cmd_reset_access() -> Tuple[bool, str]:
+    """Regenerate the local operator login password and report it once.
+
+    Recovery path for a box whose password has been lost: without it the only
+    option is a reinstall, which wipes the device's display settings and media
+    cache and takes a live board down.
+
+    We cannot do the work here — this process runs as bluebird-kiosk with
+    NoNewPrivileges=yes and cannot change a credential. bluebird-reset-access
+    .service (root, oneshot) generates the password locally and drops it in a
+    0640 root:bluebird-kiosk handoff file. Nothing is ever sent *to* the device:
+    the control plane has no say in the value, so a compromised console cannot
+    choose a password it already knows.
+
+    The returned string is the one and only delivery. We delete the handoff
+    immediately, whether or not parsing succeeded, so the credential does not
+    sit on disk waiting for the next person with local access.
+    """
+    # Clear any stale handoff first, so a failed run can't report an old
+    # password as if it were the new one.
+    try:
+        _ACCESS_HANDOFF.unlink()
+    except OSError:
+        pass
+
+    ok, msg = _run_systemctl(["start", "bluebird-reset-access.service"], timeout_s=60)
+    if not ok:
+        return False, "could not run the reset unit: " + msg
+
+    # systemctl start on a Type=oneshot returns after ExecStart finishes, so
+    # the file should already be there; poll briefly anyway rather than racing
+    # a slow disk.
+    payload = None
+    for _ in range(20):
+        try:
+            payload = json.loads(_ACCESS_HANDOFF.read_text(encoding="utf-8"))
+            break
+        except (OSError, ValueError):
+            time.sleep(0.1)
+
+    try:
+        _ACCESS_HANDOFF.unlink()
+    except OSError as exc:
+        # The credential is still on disk — say so loudly rather than let it
+        # linger silently.
+        logger.error("reset_access: could not remove handoff %s: %s", _ACCESS_HANDOFF, exc)
+
+    if not isinstance(payload, dict) or not payload.get("password"):
+        return False, "reset unit ran but produced no usable credential"
+
+    account = str(payload.get("account") or "bluebird")
+    return True, "account={0} password={1}".format(account, payload["password"])
+
+
 def _cmd_restart_kiosk() -> Tuple[bool, str]:
     # Ubuntu installs run the session through greetd (the watchdog's
     # field-proven heal path); Debian live-build images use
@@ -309,6 +366,10 @@ _COMMAND_EXECUTORS = {
     "force_sync": _cmd_force_sync,
     "check_update": _cmd_check_update,
     "restart_kiosk": _cmd_restart_kiosk,
+    # Returns a freshly generated login password in its result — the ONLY
+    # command whose result is a credential. The server marks this one
+    # sensitive and scrubs the stored result after a short window.
+    "reset_access": _cmd_reset_access,
     # reboot is special-cased in _execute_commands: result is POSTed
     # BEFORE systemctl reboot, because afterwards there is no process
     # left to report it.

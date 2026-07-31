@@ -1,0 +1,41 @@
+[Unit]
+Description=BlueBird Kiosk OS — regenerate the local operator login password
+# No network dependency on purpose: the whole point is recovering a box whose
+# operator is locked out, which is often exactly when the network is the
+# problem. The generated password is handed to the heartbeat through a local
+# file, so this unit works fully offline.
+
+[Service]
+# Triggered ONLY by the heartbeat, when the super-admin fleet console enqueues
+# a "reset_access" command for this device (see kiosk_command_store's
+# ALLOWED_COMMANDS and the executor map in services/heartbeat.py). It is not
+# enabled, not timed, and has no WantedBy — nothing starts it on its own.
+#
+# It exists as a separate root unit because bluebird-heartbeat.service runs as
+# bluebird-kiosk with NoNewPrivileges=yes and ProtectSystem=strict: it cannot
+# change a credential, and that restriction is worth keeping. The privileged
+# surface is this one script with a two-value account allowlist.
+Type=oneshot
+RemainAfterExit=no
+
+ExecStart=/opt/bluebird-kiosk/bin/reset-access bluebird
+
+# The handoff file is the only thing this unit needs to write.
+ReadWritePaths=/var/lib/bluebird-kiosk
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+
+TimeoutStartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+# Intentionally empty — on-demand only.
