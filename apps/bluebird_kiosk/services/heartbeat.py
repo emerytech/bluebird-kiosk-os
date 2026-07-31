@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import os
 import socket
 import subprocess
@@ -291,61 +292,58 @@ def _cmd_check_update() -> Tuple[bool, str]:
     return _run_systemctl(["start", "--no-block", "bluebird-update.service"])
 
 
-_ACCESS_HANDOFF = Path("/var/lib/bluebird-kiosk/access-reset.json")
+_ACCESS_REQUEST = Path("/var/lib/bluebird-kiosk/access-reset.request")
+
+# A crypt(3) SHA-512 record, as produced by `openssl passwd -6` / crypt.crypt
+# with METHOD_SHA512 and as stored in /etc/shadow: $6$<salt>$<checksum>.
+_SHADOW_RE = re.compile(r"^\$6\$[./A-Za-z0-9]{1,16}\$[./A-Za-z0-9]{86}$")
 
 
-def _cmd_reset_access() -> Tuple[bool, str]:
-    """Regenerate the local operator login password and report it once.
+def _cmd_reset_access(args: Dict[str, Any]) -> Tuple[bool, str]:
+    """Apply an operator-chosen login password sent from the fleet console.
 
     Recovery path for a box whose password has been lost: without it the only
     option is a reinstall, which wipes the device's display settings and media
     cache and takes a live board down.
 
-    We cannot do the work here — this process runs as bluebird-kiosk with
-    NoNewPrivileges=yes and cannot change a credential. bluebird-reset-access
-    .service (root, oneshot) generates the password locally and drops it in a
-    0640 root:bluebird-kiosk handoff file. Nothing is ever sent *to* the device:
-    the control plane has no say in the value, so a compromised console cannot
-    choose a password it already knows.
+    The console never sends a plaintext password. The server hashes it the
+    moment it is submitted and ships only the crypt(3) record, which we hand to
+    `chpasswd -e` — so the password itself exists nowhere on this device, in the
+    command queue, or in any backup of it.
 
-    The returned string is the one and only delivery. We delete the handoff
-    immediately, whether or not parsing succeeded, so the credential does not
-    sit on disk waiting for the next person with local access.
+    We cannot apply it here: this process runs as bluebird-kiosk with
+    NoNewPrivileges=yes and cannot change a credential. We stage the hash in a
+    0600 request file and let bluebird-reset-access.service (root, oneshot) do
+    the work, then remove the file whether or not the unit succeeded.
     """
-    # Clear any stale handoff first, so a failed run can't report an old
-    # password as if it were the new one.
-    try:
-        _ACCESS_HANDOFF.unlink()
-    except OSError:
-        pass
+    shadow = str((args or {}).get("shadow") or "").strip()
+    if not shadow:
+        return False, "no password supplied"
+    # Validate the shape before staging it. This string is written to a file
+    # that a root unit feeds to chpasswd; anything that is not a crypt record
+    # has no business getting that far.
+    if not _SHADOW_RE.match(shadow):
+        return False, "password hash is not a valid SHA-512 crypt record"
 
-    ok, msg = _run_systemctl(["start", "bluebird-reset-access.service"], timeout_s=60)
+    try:
+        _ACCESS_REQUEST.write_text(json.dumps({"shadow": shadow}), encoding="utf-8")
+        _ACCESS_REQUEST.chmod(0o600)
+    except OSError as exc:
+        return False, "could not stage the request: {0}".format(exc)
+
+    try:
+        ok, msg = _run_systemctl(["start", "bluebird-reset-access.service"], timeout_s=60)
+    finally:
+        # Never leave credential material staged, even if the unit failed or
+        # systemctl raised.
+        try:
+            _ACCESS_REQUEST.unlink()
+        except OSError as exc:
+            logger.error("reset_access: could not remove %s: %s", _ACCESS_REQUEST, exc)
+
     if not ok:
         return False, "could not run the reset unit: " + msg
-
-    # systemctl start on a Type=oneshot returns after ExecStart finishes, so
-    # the file should already be there; poll briefly anyway rather than racing
-    # a slow disk.
-    payload = None
-    for _ in range(20):
-        try:
-            payload = json.loads(_ACCESS_HANDOFF.read_text(encoding="utf-8"))
-            break
-        except (OSError, ValueError):
-            time.sleep(0.1)
-
-    try:
-        _ACCESS_HANDOFF.unlink()
-    except OSError as exc:
-        # The credential is still on disk — say so loudly rather than let it
-        # linger silently.
-        logger.error("reset_access: could not remove handoff %s: %s", _ACCESS_HANDOFF, exc)
-
-    if not isinstance(payload, dict) or not payload.get("password"):
-        return False, "reset unit ran but produced no usable credential"
-
-    account = str(payload.get("account") or "bluebird")
-    return True, "account={0} password={1}".format(account, payload["password"])
+    return True, "password updated for the bluebird account"
 
 
 def _cmd_restart_kiosk() -> Tuple[bool, str]:
@@ -366,14 +364,19 @@ _COMMAND_EXECUTORS = {
     "force_sync": _cmd_force_sync,
     "check_update": _cmd_check_update,
     "restart_kiosk": _cmd_restart_kiosk,
-    # Returns a freshly generated login password in its result — the ONLY
-    # command whose result is a credential. The server marks this one
-    # sensitive and scrubs the stored result after a short window.
+    # Carries a payload: the operator's new password as a crypt hash. The
+    # plaintext never reaches this device.
     "reset_access": _cmd_reset_access,
     # reboot is special-cased in _execute_commands: result is POSTed
     # BEFORE systemctl reboot, because afterwards there is no process
     # left to report it.
 }
+
+# Executors in this set are called with the command's parsed `args` dict;
+# everything else is a bare verb called with no arguments. Keeping the split
+# explicit means adding a payload to one command cannot change the calling
+# convention of the others.
+_COMMANDS_WITH_ARGS = frozenset({"reset_access"})
 
 
 def _post_command_result(
@@ -423,8 +426,21 @@ def _execute_commands(commands: List[Dict[str, Any]], backend: str, token: str) 
                 status="error", result=f"unknown command: {name!r}",
             )
             continue
+        # Commands that carry a payload declare it by accepting one argument.
+        # Everything else stays a bare verb, so adding args here changed no
+        # existing executor.
+        raw_args = entry.get("args")
         try:
-            ok, msg = executor()
+            if name in _COMMANDS_WITH_ARGS:
+                parsed = {}
+                if raw_args:
+                    try:
+                        parsed = json.loads(raw_args)
+                    except (TypeError, ValueError):
+                        parsed = {}
+                ok, msg = executor(parsed)
+            else:
+                ok, msg = executor()
         except Exception as exc:  # never let one command kill the loop
             ok, msg = False, f"executor crashed: {exc}"
         logger.info("command %s: %s — %s", cmd_id, "done" if ok else "error", msg[:200])

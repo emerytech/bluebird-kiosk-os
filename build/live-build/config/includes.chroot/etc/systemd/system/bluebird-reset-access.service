@@ -18,7 +18,7 @@ Description=BlueBird Kiosk OS — regenerate the local operator login password
 Type=oneshot
 RemainAfterExit=no
 
-ExecStart=/opt/bluebird-kiosk/bin/reset-access bluebird
+ExecStart=/opt/bluebird-kiosk/bin/reset-access
 
 # The handoff file is the only thing this unit needs to write.
 ReadWritePaths=/var/lib/bluebird-kiosk
