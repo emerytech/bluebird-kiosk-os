@@ -846,6 +846,21 @@ def create_app() -> FastAPI:
             {"ok": reload_ok, "reload": reload_msg, "overlay_closed": True}
         )
 
+    @app.post("/admin/kiosk/dismiss-overlay")
+    async def admin_dismiss_overlay():
+        """Close the admin overlay window without touching the slideshow.
+
+        Deliberately NOT behind require_admin: this backs the top-bar ✕,
+        which must work from the PIN screen itself — an accidental 5-finger
+        gesture (or a curious passerby) has no PIN, and without this the
+        overlay can only be cleared by rebooting the kiosk. Exposure is
+        acceptable because the server binds loopback only, this route sends
+        no CORS headers (cross-origin pages can't pass the preflight), and
+        closing the overlay just returns the display to its default state —
+        the same outcome as never having opened it."""
+        ok, msg = system.close_admin_overlay()
+        return JSONResponse({"ok": ok, "message": msg})
+
     @app.post("/admin/kiosk/slug", dependencies=[Depends(require_admin)])
     async def admin_kiosk_slug(body: SlugBody):
         cfg = config.read_config()

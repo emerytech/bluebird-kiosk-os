@@ -456,7 +456,25 @@ async function returnToKiosk() {
   try {
     await api('/admin/kiosk/return-to-kiosk', { method: 'POST' });
   } catch (e) {
-    // Expected: the admin window is being torn down server-side.
+    // Usually expected: the admin window is being torn down server-side and
+    // the socket dies before the response. But a real failure (e.g. the
+    // session expired → 401 → back to the PIN screen) leaves this window
+    // open — restore the button so the action works after re-login.
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '↻ Return to Kiosk Display';
+    }
+  }
+}
+
+// Close ONLY the overlay window, via an endpoint that deliberately skips the
+// PIN gate. The slideshow window is left alone (unlike Return to Kiosk,
+// which also relaunches it — a recovery action that stays PIN-gated).
+async function dismissOverlay() {
+  try {
+    await api('/admin/kiosk/dismiss-overlay', { method: 'POST' });
+  } catch (e) {
+    // Expected: this Chromium process is killed server-side mid-response.
   }
 }
 
@@ -706,11 +724,11 @@ document.getElementById('btn-disp-apply').addEventListener('click', applyDisplay
 }
 document.getElementById('btn-kiosk-restart').addEventListener('click', restartKiosk);
 document.getElementById('btn-return-to-kiosk').addEventListener('click', returnToKiosk);
-// Top-bar ✕ close button — same action as Return to Kiosk, available from
+// Top-bar ✕ close button — close the overlay window, available from
 // every tab and even from the PIN screen (so a staff member who opened
 // the overlay by accident can dismiss it without entering the PIN).
 const btnCloseOverlay = document.getElementById('btn-close-overlay');
-if (btnCloseOverlay) btnCloseOverlay.addEventListener('click', returnToKiosk);
+if (btnCloseOverlay) btnCloseOverlay.addEventListener('click', dismissOverlay);
 document.getElementById('btn-kiosk-slug').addEventListener('click', changeSlug);
 document.getElementById('btn-sys-reboot').addEventListener('click', rebootSystem);
 document.getElementById('btn-sys-shutdown').addEventListener('click', shutdownSystem);
