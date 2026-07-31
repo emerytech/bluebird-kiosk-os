@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# Regenerate the local login password for a locked-out operator.
+#
+# Runs as root from bluebird-reset-access.service, which the heartbeat starts
+# when the fleet console enqueues a "reset_access" command. The heartbeat
+# itself runs as bluebird-kiosk with NoNewPrivileges=yes and cannot change a
+# credential — that separation is deliberate, so the privileged half lives
+# here and does exactly one thing.
+#
+# The password is generated HERE and never travels toward the device: the
+# console has nothing to send, so a compromised control plane cannot choose
+# the password, and there is no operator-typed secret in a form, a log, or a
+# request body. The generated value is written to a short-lived handoff file
+# that only root and the kiosk user can read; the heartbeat reads it once,
+# reports it, and deletes it.
+set -euo pipefail
+
+HANDOFF=/var/lib/bluebird-kiosk/access-reset.json
+KIOSK_GROUP=bluebird-kiosk
+
+# Only these accounts may be targeted. `bluebird` is the operator login (the
+# account the fleet SSH key and console docs both refer to). Anything else is
+# refused rather than passed to chpasswd — this script is reachable from a
+# network-delivered command, so its input surface stays closed.
+TARGET="${1:-bluebird}"
+case "$TARGET" in
+  bluebird|root) ;;
+  *)
+    echo "refusing unknown target account: $TARGET" >&2
+    exit 2
+    ;;
+esac
+
+if ! id -u "$TARGET" >/dev/null 2>&1; then
+  echo "target account does not exist: $TARGET" >&2
+  exit 3
+fi
+
+# 24 chars from an unambiguous alphabet — no 0/O/1/l/I, because this gets read
+# off a screen and typed on a kiosk with no keyboard layout guarantees.
+ALPHABET='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'
+# Drawn from FINITE urandom chunks on purpose. The obvious
+# `tr -dc ... < /dev/urandom | head -c 24` makes head close the pipe on an
+# endless source, tr dies of SIGPIPE, and under `set -o pipefail` the whole
+# script exits 141 — i.e. the reset appears to fail for no visible reason.
+PASSWORD=""
+while [ "${#PASSWORD}" -lt 24 ]; do
+  CHUNK="$(head -c 256 /dev/urandom | LC_ALL=C tr -dc "$ALPHABET")"
+  PASSWORD="${PASSWORD}${CHUNK}"
+done
+PASSWORD="${PASSWORD:0:24}"
+if [ "${#PASSWORD}" -ne 24 ]; then
+  echo "could not generate a password of the expected length" >&2
+  exit 4
+fi
+
+printf '%s:%s\n' "$TARGET" "$PASSWORD" | chpasswd
+
+# A locked account (set by install.sh --lockdown) would still refuse the new
+# password, which would look like the reset silently failed.
+passwd -u "$TARGET" >/dev/null 2>&1 || true
+
+# Write the handoff atomically, and only ever as 0640 root:bluebird-kiosk —
+# never world-readable, not even for the instant between create and chmod.
+UMASK_OLD="$(umask)"
+umask 0177
+TMP="$(mktemp "${HANDOFF}.XXXXXX")"
+umask "$UMASK_OLD"
+printf '{"account":"%s","password":"%s","reset_at":"%s"}\n' \
+  "$TARGET" "$PASSWORD" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$TMP"
+chown "root:${KIOSK_GROUP}" "$TMP"
+chmod 0640 "$TMP"
+mv -f "$TMP" "$HANDOFF"
+
+# Deliberately not echoed to stdout: this unit's output goes to the journal,
+# and the journal is collected by the diagnostics surface.
+echo "access reset for ${TARGET}; handoff written"
