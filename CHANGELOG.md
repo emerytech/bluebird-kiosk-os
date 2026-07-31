@@ -3,6 +3,14 @@
 Most recent first. These notes are shown in the admin overlay before you apply a
 kiosk update, so an operator can see what an update will install before confirming.
 
+## 2026-07-31
+- **The ✕ on the admin PIN screen now closes the panel.** Previously the close
+  button did nothing until a PIN was entered, so an admin panel opened by
+  accident (5-finger hold or corner taps) could only be cleared by rebooting
+  the kiosk. The ✕ now dismisses the panel from any screen, PIN entered or
+  not — the PIN is still required to actually get into the admin panel.
+  (No action needed; applies on update.)
+
 ## 2026-06-19
 - **Different content on each screen:** a kiosk with two (or more) displays can now show a
   DIFFERENT board on each — e.g. the Legacy Wall on one screen and a Beacon board on the other,
