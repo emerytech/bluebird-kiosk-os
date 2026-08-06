@@ -141,6 +141,33 @@ def _read_kiosk_os_version() -> Optional[str]:
         return None
 
 
+def _collect_compositor_count() -> Optional[int]:
+    """Number of running sway instances.
+
+    Exactly one is healthy. Two means a second launcher (greetd alongside
+    bluebird-kiosk.service) started its own session and the pair are fighting
+    over DRM master — no frames reach any output while everything else on the
+    box keeps looking healthy. That state took the NEN lobby kiosk down for a
+    day on 2026-08-05/06 and was invisible to the fleet console the whole time,
+    because this process is a separate unit and kept reporting normally.
+
+    Zero means no compositor at all (a box sitting at a text console). Returns
+    None if pgrep is unavailable, so the server can distinguish "not reported"
+    from a real count.
+    """
+    try:
+        proc = subprocess.run(
+            ["pgrep", "-x", "sway"], capture_output=True, text=True, timeout=5
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    # pgrep exits 1 with no output when nothing matches — that is a real zero,
+    # not an error.
+    if proc.returncode not in (0, 1):
+        return None
+    return len([ln for ln in proc.stdout.split("\n") if ln.strip()])
+
+
 _OUTPUTS_PATH = Path("/var/lib/bluebird-kiosk/outputs.json")
 
 
@@ -605,6 +632,9 @@ def send_once() -> bool:
     watchdog_state = _collect_watchdog_state()
     if watchdog_state:
         payload["watchdog"] = watchdog_state
+    compositors = _collect_compositor_count()
+    if compositors is not None:
+        payload["compositor_count"] = compositors
     url = backend.rstrip("/") + "/api/public/kiosk/heartbeat"
     # Bearer when licensed — this is what authorizes remote-command
     # delivery. Unlicensed (pre-firstboot) kiosks heartbeat slug-only
