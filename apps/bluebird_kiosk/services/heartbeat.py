@@ -373,6 +373,63 @@ def _cmd_reset_access(args: Dict[str, Any]) -> Tuple[bool, str]:
     return True, "password updated for the bluebird account"
 
 
+_OUTPUT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9\-]{0,31}$")
+# e.g. 1920x1080@60Hz — the format list_outputs()/wlr-randr use.
+_MODE_RE = re.compile(r"^\d{3,5}x\d{3,5}(@\d{1,3}(\.\d+)?Hz)?$")
+
+
+def _cmd_set_display_mode(args: Dict[str, Any]) -> Tuple[bool, str]:
+    """Set an output's resolution from the fleet console, and make it stick.
+
+    Why this exists: sway picks a mode from EDID, and a sink that advertises a mode it
+    cannot actually lock (the NEN lobby LG offers 4096x2160 DCI-4K five times and flags
+    NO preferred mode) leaves the kiosk confidently driving an output that produces no
+    picture — "No Signal" on the panel while every fleet-console health signal reads
+    green. Recovering that used to require standing at the panel or SSH; it cost two days
+    on 2026-08-06/07.
+
+    Safety: the requested mode MUST be one the output actually advertises. Setting an
+    unsupported mode remotely blacks out the screen and there is nobody on site to undo
+    it — refusing an unadvertised mode is the difference between a fix and an outage.
+
+    On success the change is persisted via display.persist_settings(), so the kiosk-display-
+    manager reapplies it on every boot and re-plug. Without that the mode reverts on the
+    next restart and the drift returns.
+    """
+    output = str((args or {}).get("output") or "").strip()
+    mode = str((args or {}).get("mode") or "").strip()
+    if not output or not mode:
+        return False, "output and mode are required"
+    if not _OUTPUT_NAME_RE.match(output):
+        return False, "invalid output name"
+    if not _MODE_RE.match(mode):
+        return False, "invalid mode format (expected e.g. 1920x1080@60Hz)"
+
+    try:
+        from . import display
+    except Exception as exc:  # noqa: BLE001 — never crash the heartbeat loop
+        return False, "display service unavailable: {0}".format(exc)
+
+    try:
+        outs = {o.name: o for o in display.list_outputs()}
+    except Exception as exc:  # noqa: BLE001
+        return False, "could not read outputs: {0}".format(exc)
+    target = outs.get(output)
+    if target is None:
+        return False, "unknown output {0!r} (have: {1})".format(output, ", ".join(sorted(outs)) or "none")
+    if mode not in (target.available_modes or []):
+        return False, "mode {0!r} is not advertised by {1} — refusing (would blank the screen)".format(mode, output)
+
+    ok, msg = display.set_mode(output, mode)
+    if not ok:
+        return False, "set_mode failed: {0}".format(msg)
+    # Durability: without this the mode is lost on the next compositor restart.
+    p_ok, p_msg = display.persist_settings()
+    if not p_ok:
+        return True, "mode set to {0}, but NOT persisted ({1}) — it will revert on restart".format(mode, p_msg)
+    return True, "{0} set to {1} and persisted".format(output, mode)
+
+
 def _cmd_restart_kiosk() -> Tuple[bool, str]:
     # Ubuntu installs run the session through greetd (the watchdog's
     # field-proven heal path); Debian live-build images use
@@ -394,6 +451,9 @@ _COMMAND_EXECUTORS = {
     # Carries a payload: the operator's new password as a crypt hash. The
     # plaintext never reaches this device.
     "reset_access": _cmd_reset_access,
+    # Carries a payload: {"output": "HDMI-A-1", "mode": "1920x1080@60Hz"}. Lets an
+    # operator recover a screen stuck on an unusable EDID mode without going on site.
+    "set_display_mode": _cmd_set_display_mode,
     # reboot is special-cased in _execute_commands: result is POSTed
     # BEFORE systemctl reboot, because afterwards there is no process
     # left to report it.
@@ -403,7 +463,7 @@ _COMMAND_EXECUTORS = {
 # everything else is a bare verb called with no arguments. Keeping the split
 # explicit means adding a payload to one command cannot change the calling
 # convention of the others.
-_COMMANDS_WITH_ARGS = frozenset({"reset_access"})
+_COMMANDS_WITH_ARGS = frozenset({"reset_access", "set_display_mode"})
 
 
 def _post_command_result(
