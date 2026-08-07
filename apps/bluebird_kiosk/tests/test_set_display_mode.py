@@ -53,7 +53,13 @@ def _fake_display(monkeypatch, outputs, set_ok=True, set_msg="OK",
     mod.list_outputs = list_outputs
     mod.set_mode = set_mode
     mod.persist_settings = persist_settings
+    # Patch BOTH the module table and the package attribute. The executor does
+    # `from . import display`, which resolves via the parent package's attribute once
+    # anything else in the suite has imported the real module — so patching sys.modules
+    # alone works in isolation and silently does nothing in a full run.
+    import bluebird_kiosk.services as services_pkg
     monkeypatch.setitem(sys.modules, "bluebird_kiosk.services.display", mod)
+    monkeypatch.setattr(services_pkg, "display", mod, raising=False)
     return calls
 
 
