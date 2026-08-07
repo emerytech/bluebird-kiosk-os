@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# BlueBird Kiosk OS — apply an operator-chosen display mode.
+#
+# Triggered ONLY by the heartbeat, when the fleet console enqueues a "set_display_mode"
+# command (see kiosk_command_store ALLOWED_COMMANDS + the executor map in
+# services/heartbeat.py). Not enabled, not timed, nothing starts it on its own.
+#
+# Why a separate root unit rather than the heartbeat doing it directly:
+# bluebird-heartbeat.service runs as bluebird-kiosk with ProtectSystem=strict and
+# ProtectHome=yes, so it CANNOT reach sway's wayland socket — the same reason the display
+# inventory is published to a file for it to read instead of queried live. A first cut had
+# the heartbeat call display.list_outputs() itself; it always failed with "unknown output"
+# from inside that sandbox. This unit runs outside it and drops to bluebird-kiosk with the
+# wayland environment, exactly like take-screenshot does for grim.
+#
+# The request file carries {"output": "...", "mode": "..."} and is removed whether or not
+# the apply succeeded, so a stale request can never be replayed on a later run.
+set -uo pipefail
+
+REQ="/var/lib/bluebird-kiosk/display-mode.request"
+SETTINGS="/var/lib/bluebird-kiosk/display-settings.json"
+RUNTIME_DIR="/run/user/999"
+
+log() { printf '[set-display-mode] %s\n' "$*"; }
+die() { log "$*"; rm -f "$REQ"; exit 1; }
+
+[[ -f "$REQ" ]] || die "no request file"
+
+OUTPUT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("output",""))' "$REQ" 2>/dev/null || true)"
+MODE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("mode",""))' "$REQ" 2>/dev/null || true)"
+[[ -n "$OUTPUT" && -n "$MODE" ]] || die "request missing output or mode"
+
+# Find the live wayland socket. The session's display number is not fixed across restarts,
+# so probe rather than assume wayland-0/1.
+WAYLAND_SOCK=""
+for s in "$RUNTIME_DIR"/wayland-[0-9]*; do
+  [[ -S "$s" ]] || continue
+  case "$s" in *.lock) continue;; esac
+  WAYLAND_SOCK="$(basename "$s")"
+  break
+done
+[[ -n "$WAYLAND_SOCK" ]] || die "no wayland socket in $RUNTIME_DIR — is the session up?"
+
+as_kiosk() {
+  sudo -n -u bluebird-kiosk env XDG_RUNTIME_DIR="$RUNTIME_DIR" \
+       WAYLAND_DISPLAY="$WAYLAND_SOCK" "$@"
+}
+
+# Refuse a mode the sink does not advertise. Setting an unsupported mode blanks a screen
+# with nobody on site to undo it, so this check is the difference between a fix and an
+# outage. wlr-randr is the authority; the server only shape-checks.
+if ! as_kiosk wlr-randr 2>/dev/null | grep -qF "$MODE"; then
+  die "mode $MODE is not advertised by this display — refusing"
+fi
+
+if ! as_kiosk wlr-randr --output "$OUTPUT" --mode "$MODE" >/dev/null 2>&1; then
+  die "wlr-randr failed to set $OUTPUT to $MODE"
+fi
+
+# Persist so kiosk-display-manager reapplies it on every boot and re-plug. Without this the
+# mode reverts on the next compositor restart and the EDID drift that caused the 2026-08-06
+# NEN lobby outage comes straight back.
+python3 - "$SETTINGS" "$OUTPUT" "$MODE" <<'PY'
+import json, os, sys, tempfile
+path, output, mode = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh) or {}
+except (OSError, ValueError):
+    data = {}
+outs = data.get("outputs")
+if not isinstance(outs, dict):
+    outs = {}
+entry = outs.get(output) if isinstance(outs.get(output), dict) else {}
+entry["mode"] = mode
+outs[output] = entry
+data["outputs"] = outs
+os.makedirs(os.path.dirname(path), exist_ok=True)
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".tmp")
+with os.fdopen(fd, "w", encoding="utf-8") as fh:
+    json.dump(data, fh)
+os.replace(tmp, path)
+os.chmod(path, 0o664)
+PY
+
+rm -f "$REQ"
+log "$OUTPUT set to $MODE and persisted"
+exit 0
