@@ -1,0 +1,38 @@
+[Unit]
+Description=BlueBird Kiosk OS — apply an operator-chosen display mode
+# No network dependency: the request has already arrived and been staged locally by the
+# heartbeat. Applying it is purely a local wlr-randr call against the running session.
+
+[Service]
+# Triggered ONLY by the heartbeat, when the fleet console enqueues a "set_display_mode"
+# command for this device. Not enabled, not timed, no WantedBy — nothing starts it on its own.
+#
+# It exists as a separate unit because bluebird-heartbeat.service runs as bluebird-kiosk with
+# ProtectSystem=strict + ProtectHome=yes and therefore CANNOT reach sway's wayland socket —
+# the same constraint that makes the display inventory a published file rather than a live
+# query. A first implementation had the heartbeat call display.list_outputs() directly and it
+# always failed with "unknown output" from inside that sandbox. This unit runs outside it and
+# drops to bluebird-kiosk with the wayland environment, the same shape take-screenshot uses
+# for grim.
+Type=oneshot
+RemainAfterExit=no
+
+ExecStart=/opt/bluebird-kiosk/bin/set-display-mode
+
+# The request handoff and the persisted settings both live here.
+ReadWritePaths=/var/lib/bluebird-kiosk
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+
+TimeoutStartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+# Intentionally empty — on-demand only.

@@ -378,23 +378,31 @@ _OUTPUT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9\-]{0,31}$")
 _MODE_RE = re.compile(r"^\d{3,5}x\d{3,5}(@\d{1,3}(\.\d+)?Hz)?$")
 
 
+_DISPLAY_MODE_REQUEST = Path("/var/lib/bluebird-kiosk/display-mode.request")
+
+
 def _cmd_set_display_mode(args: Dict[str, Any]) -> Tuple[bool, str]:
     """Set an output's resolution from the fleet console, and make it stick.
 
     Why this exists: sway picks a mode from EDID, and a sink that advertises a mode it
-    cannot actually lock (the NEN lobby LG offers 4096x2160 DCI-4K five times and flags
-    NO preferred mode) leaves the kiosk confidently driving an output that produces no
-    picture — "No Signal" on the panel while every fleet-console health signal reads
-    green. Recovering that used to require standing at the panel or SSH; it cost two days
-    on 2026-08-06/07.
+    cannot actually lock (the NEN lobby LG offers 4096x2160 DCI-4K five times and flags NO
+    preferred mode) leaves the kiosk confidently driving an output that produces no picture
+    — "No Signal" on the panel while every fleet-console health signal reads green.
+    Recovering that used to require standing at the panel or SSH; it cost two days on
+    2026-08-06/07.
 
-    Safety: the requested mode MUST be one the output actually advertises. Setting an
-    unsupported mode remotely blacks out the screen and there is nobody on site to undo
-    it — refusing an unadvertised mode is the difference between a fix and an outage.
+    THIS PROCESS CANNOT TALK TO SWAY. bluebird-heartbeat.service runs as bluebird-kiosk with
+    ProtectSystem=strict + ProtectHome=yes, so the wayland socket is out of reach — the same
+    reason the output inventory is a file we read rather than a live query. A first cut
+    called display.list_outputs() here and failed every time with "unknown output" from
+    inside the sandbox. So: validate the output name against the published inventory, stage
+    the request, and let bluebird-set-display-mode.service (which runs outside the sandbox
+    and drops to bluebird-kiosk with the wayland env) do the apply — the same handoff shape
+    reset_access uses for chpasswd.
 
-    On success the change is persisted via display.persist_settings(), so the kiosk-display-
-    manager reapplies it on every boot and re-plug. Without that the mode reverts on the
-    next restart and the drift returns.
+    The MODE is validated by that unit against what wlr-randr actually advertises, because
+    only it can see the real mode list. Setting an unsupported mode blanks a screen with
+    nobody on site to undo it.
     """
     output = str((args or {}).get("output") or "").strip()
     mode = str((args or {}).get("mode") or "").strip()
@@ -405,28 +413,38 @@ def _cmd_set_display_mode(args: Dict[str, Any]) -> Tuple[bool, str]:
     if not _MODE_RE.match(mode):
         return False, "invalid mode format (expected e.g. 1920x1080@60Hz)"
 
-    try:
-        from . import display
-    except Exception as exc:  # noqa: BLE001 — never crash the heartbeat loop
-        return False, "display service unavailable: {0}".format(exc)
+    # Output NAME check against the inventory the display manager publishes for us. We
+    # cannot check the mode here — that needs the live wlr-randr list, which is why the
+    # applier unit re-checks it.
+    known = _collect_outputs()
+    if known is None:
+        return False, ("no display inventory yet — the kiosk publishes it from inside the "
+                       "session, so give it one reconcile cycle after boot")
+    names = [str(o.get("name") or "") for o in known]
+    if output not in names:
+        return False, "unknown output {0!r} (have: {1})".format(output, ", ".join(n for n in names if n) or "none")
 
     try:
-        outs = {o.name: o for o in display.list_outputs()}
-    except Exception as exc:  # noqa: BLE001
-        return False, "could not read outputs: {0}".format(exc)
-    target = outs.get(output)
-    if target is None:
-        return False, "unknown output {0!r} (have: {1})".format(output, ", ".join(sorted(outs)) or "none")
-    if mode not in (target.available_modes or []):
-        return False, "mode {0!r} is not advertised by {1} — refusing (would blank the screen)".format(mode, output)
+        _DISPLAY_MODE_REQUEST.parent.mkdir(parents=True, exist_ok=True)
+        _DISPLAY_MODE_REQUEST.write_text(json.dumps({"output": output, "mode": mode}),
+                                         encoding="utf-8")
+    except OSError as exc:
+        return False, "could not stage the request: {0}".format(exc)
 
-    ok, msg = display.set_mode(output, mode)
+    ok, msg = _run_systemctl(["start", "bluebird-set-display-mode.service"], timeout_s=45)
     if not ok:
-        return False, "set_mode failed: {0}".format(msg)
-    # Durability: without this the mode is lost on the next compositor restart.
-    p_ok, p_msg = display.persist_settings()
-    if not p_ok:
-        return True, "mode set to {0}, but NOT persisted ({1}) — it will revert on restart".format(mode, p_msg)
+        try:
+            _DISPLAY_MODE_REQUEST.unlink()
+        except OSError:
+            pass
+        return False, "could not run the apply unit: " + msg
+    # The unit removes the request itself on both paths; a leftover means it never ran.
+    if _DISPLAY_MODE_REQUEST.exists():
+        try:
+            _DISPLAY_MODE_REQUEST.unlink()
+        except OSError:
+            pass
+        return False, "apply unit did not consume the request"
     return True, "{0} set to {1} and persisted".format(output, mode)
 
 

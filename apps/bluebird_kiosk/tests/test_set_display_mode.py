@@ -1,17 +1,22 @@
 """Remote resolution control (set_display_mode).
 
-Motivation: sway selects a mode from EDID, and a sink can advertise a mode it cannot lock.
-The NEN lobby LG offers 4096x2160 (DCI-4K) five times and flags NO preferred mode, so some
+Motivation: sway selects a mode from EDID, and a sink can advertise one it cannot lock. The
+NEN lobby LG offers 4096x2160 (DCI-4K) five times and flags NO preferred mode, so some
 restarts landed the kiosk on it — the panel showed "No Signal" while every fleet-console
 signal read green, and recovery required physical access. That cost two days on 2026-08-06/07.
 
-The dangerous half of this feature is the write: setting an unsupported mode remotely blanks
-a screen with nobody on site to undo it. Most of these tests pin the refusal paths.
+ARCHITECTURE NOTE, learned the hard way: bluebird-heartbeat.service runs as bluebird-kiosk
+with ProtectSystem=strict + ProtectHome=yes and CANNOT reach sway's wayland socket. A first
+implementation called display.list_outputs() directly from the executor and failed every
+time in the field with "unknown output" — while working fine when run by hand outside the
+sandbox. So the executor validates the output NAME against the published inventory, stages a
+request file, and bluebird-set-display-mode.service (outside the sandbox) applies it and
+re-checks the MODE against what wlr-randr actually advertises.
 """
 from __future__ import annotations
 
+import json
 import sys
-import types
 from pathlib import Path
 
 import pytest
@@ -23,78 +28,70 @@ if str(_ROOT / "apps") not in sys.path:
 
 from bluebird_kiosk.services import heartbeat  # noqa: E402
 
-
-class _Out:
-    def __init__(self, name, modes, current="1920x1080@60Hz", transform="normal"):
-        self.name = name
-        self.enabled = True
-        self.current_mode = current
-        self.available_modes = modes
-        self.transform = transform
+_INVENTORY = [
+    {"name": "DP-1", "mode": "1920x1080@60Hz", "active": True, "transform": "normal"},
+    {"name": "HDMI-A-1", "mode": "1920x1080@60Hz", "active": True, "transform": "normal"},
+]
 
 
-def _fake_display(monkeypatch, outputs, set_ok=True, set_msg="OK",
-                  persist_ok=True, persist_msg="OK"):
-    """Stub bluebird_kiosk.services.display; record calls for assertions."""
-    calls = {"set_mode": [], "persist": 0}
-    mod = types.ModuleType("bluebird_kiosk.services.display")
+@pytest.fixture()
+def staged(monkeypatch, tmp_path):
+    """Point the request file at tmp and stub the inventory + systemctl."""
+    req = tmp_path / "display-mode.request"
+    monkeypatch.setattr(heartbeat, "_DISPLAY_MODE_REQUEST", req)
+    monkeypatch.setattr(heartbeat, "_collect_outputs", lambda: list(_INVENTORY))
+    calls = []
 
-    def list_outputs():
-        return outputs
+    def fake_systemctl(args, timeout_s=None):
+        calls.append(list(args))
+        # The real unit consumes the request; emulate that so the executor's
+        # "did it actually run?" check passes.
+        if req.exists():
+            req.unlink()
+        return True, "ok"
 
-    def set_mode(output, mode):
-        calls["set_mode"].append((output, mode))
-        return set_ok, set_msg
-
-    def persist_settings():
-        calls["persist"] += 1
-        return persist_ok, persist_msg
-
-    mod.list_outputs = list_outputs
-    mod.set_mode = set_mode
-    mod.persist_settings = persist_settings
-    # Patch BOTH the module table and the package attribute. The executor does
-    # `from . import display`, which resolves via the parent package's attribute once
-    # anything else in the suite has imported the real module — so patching sys.modules
-    # alone works in isolation and silently does nothing in a full run.
-    import bluebird_kiosk.services as services_pkg
-    monkeypatch.setitem(sys.modules, "bluebird_kiosk.services.display", mod)
-    monkeypatch.setattr(services_pkg, "display", mod, raising=False)
-    return calls
+    monkeypatch.setattr(heartbeat, "_run_systemctl", fake_systemctl)
+    return {"req": req, "calls": calls}
 
 
-def test_sets_and_persists_an_advertised_mode(monkeypatch):
-    outs = [_Out("HDMI-A-1", ["1920x1080@60Hz", "3840x2160@30Hz"])]
-    calls = _fake_display(monkeypatch, outs)
-    ok, msg = heartbeat._cmd_set_display_mode(
-        {"output": "HDMI-A-1", "mode": "1920x1080@60Hz"})
+def test_stages_a_request_and_starts_the_apply_unit(staged):
+    ok, msg = heartbeat._cmd_set_display_mode({"output": "HDMI-A-1", "mode": "1920x1080@60Hz"})
     assert ok, msg
-    assert calls["set_mode"] == [("HDMI-A-1", "1920x1080@60Hz")]
-    # Durability matters as much as the change: without persist the mode reverts on the
-    # next compositor restart and the drift that caused the outage returns.
-    assert calls["persist"] == 1
+    assert ["start", "bluebird-set-display-mode.service"] in staged["calls"]
+    assert not staged["req"].exists(), "the request must not be left on disk"
 
 
-def test_refuses_a_mode_the_output_does_not_advertise(monkeypatch):
-    """The blackout guard. 4096x2160 is exactly what broke the NEN lobby panel."""
-    outs = [_Out("HDMI-A-1", ["1920x1080@60Hz"])]
-    calls = _fake_display(monkeypatch, outs)
-    ok, msg = heartbeat._cmd_set_display_mode(
-        {"output": "HDMI-A-1", "mode": "4096x2160@30Hz"})
-    assert not ok
-    assert "not advertised" in msg
-    assert calls["set_mode"] == [], "must not touch the display when refusing"
-    assert calls["persist"] == 0
+def test_request_payload_is_what_the_applier_expects(monkeypatch, tmp_path):
+    req = tmp_path / "display-mode.request"
+    monkeypatch.setattr(heartbeat, "_DISPLAY_MODE_REQUEST", req)
+    monkeypatch.setattr(heartbeat, "_collect_outputs", lambda: list(_INVENTORY))
+    seen = {}
+
+    def fake_systemctl(args, timeout_s=None):
+        seen["payload"] = json.loads(req.read_text(encoding="utf-8"))
+        req.unlink()
+        return True, "ok"
+
+    monkeypatch.setattr(heartbeat, "_run_systemctl", fake_systemctl)
+    heartbeat._cmd_set_display_mode({"output": "DP-1", "mode": "3840x2160@30Hz"})
+    assert seen["payload"] == {"output": "DP-1", "mode": "3840x2160@30Hz"}
 
 
-def test_refuses_unknown_output(monkeypatch):
-    outs = [_Out("DP-1", ["1920x1080@60Hz"])]
-    calls = _fake_display(monkeypatch, outs)
-    ok, msg = heartbeat._cmd_set_display_mode(
-        {"output": "HDMI-A-1", "mode": "1920x1080@60Hz"})
+def test_refuses_an_output_not_in_the_inventory(staged):
+    ok, msg = heartbeat._cmd_set_display_mode({"output": "HDMI-A-9", "mode": "1920x1080@60Hz"})
     assert not ok
     assert "unknown output" in msg
-    assert calls["set_mode"] == []
+    assert staged["calls"] == [], "must not start the apply unit for an unknown output"
+
+
+def test_missing_inventory_is_reported_not_guessed(monkeypatch, tmp_path):
+    """Right after boot the display manager may not have published yet — say so plainly
+    rather than rejecting a perfectly good output name."""
+    monkeypatch.setattr(heartbeat, "_DISPLAY_MODE_REQUEST", tmp_path / "r.json")
+    monkeypatch.setattr(heartbeat, "_collect_outputs", lambda: None)
+    ok, msg = heartbeat._cmd_set_display_mode({"output": "HDMI-A-1", "mode": "1920x1080@60Hz"})
+    assert not ok
+    assert "inventory" in msg
 
 
 @pytest.mark.parametrize("args", [
@@ -104,36 +101,48 @@ def test_refuses_unknown_output(monkeypatch):
     {"output": "HDMI-A-1", "mode": "; rm -rf /"},
     {"output": "HDMI-A-1; reboot", "mode": "1920x1080@60Hz"},
     {"output": "HDMI-A-1", "mode": "not-a-mode"},
-    {"output": "HDMI-A-1", "mode": "1920x1080@60Hz" + "0" * 64},
 ])
-def test_rejects_malformed_input_before_touching_the_display(monkeypatch, args):
-    calls = _fake_display(monkeypatch, [_Out("HDMI-A-1", ["1920x1080@60Hz"])])
+def test_rejects_malformed_input_before_staging_anything(staged, args):
     ok, _ = heartbeat._cmd_set_display_mode(args)
     assert not ok
-    assert calls["set_mode"] == []
+    assert staged["calls"] == []
+    assert not staged["req"].exists()
 
 
-def test_reports_when_the_mode_applied_but_did_not_persist(monkeypatch):
-    """A change that won't survive a restart must say so — silently succeeding here is
-    how a 'fixed' kiosk quietly reverts overnight."""
-    outs = [_Out("HDMI-A-1", ["1920x1080@60Hz"])]
-    _fake_display(monkeypatch, outs, persist_ok=False, persist_msg="disk full")
-    ok, msg = heartbeat._cmd_set_display_mode(
-        {"output": "HDMI-A-1", "mode": "1920x1080@60Hz"})
-    assert ok
-    assert "NOT persisted" in msg and "revert" in msg
-
-
-def test_surfaces_a_failed_set(monkeypatch):
-    outs = [_Out("HDMI-A-1", ["1920x1080@60Hz"])]
-    calls = _fake_display(monkeypatch, outs, set_ok=False, set_msg="wlr-randr exploded")
-    ok, msg = heartbeat._cmd_set_display_mode(
-        {"output": "HDMI-A-1", "mode": "1920x1080@60Hz"})
+def test_reports_when_the_apply_unit_never_consumed_the_request(monkeypatch, tmp_path):
+    """A leftover request means the unit did not run — never claim success."""
+    req = tmp_path / "display-mode.request"
+    monkeypatch.setattr(heartbeat, "_DISPLAY_MODE_REQUEST", req)
+    monkeypatch.setattr(heartbeat, "_collect_outputs", lambda: list(_INVENTORY))
+    monkeypatch.setattr(heartbeat, "_run_systemctl", lambda a, timeout_s=None: (True, "ok"))
+    ok, msg = heartbeat._cmd_set_display_mode({"output": "DP-1", "mode": "1920x1080@60Hz"})
     assert not ok
-    assert "wlr-randr exploded" in msg
-    assert calls["persist"] == 0, "must not persist a mode that failed to apply"
+    assert "did not consume" in msg
+    assert not req.exists(), "a stale request must never be left to replay later"
+
+
+def test_failed_unit_start_clears_the_request(monkeypatch, tmp_path):
+    req = tmp_path / "display-mode.request"
+    monkeypatch.setattr(heartbeat, "_DISPLAY_MODE_REQUEST", req)
+    monkeypatch.setattr(heartbeat, "_collect_outputs", lambda: list(_INVENTORY))
+    monkeypatch.setattr(heartbeat, "_run_systemctl", lambda a, timeout_s=None: (False, "boom"))
+    ok, msg = heartbeat._cmd_set_display_mode({"output": "DP-1", "mode": "1920x1080@60Hz"})
+    assert not ok and "apply unit" in msg
+    assert not req.exists()
 
 
 def test_registered_as_an_args_carrying_command():
     assert "set_display_mode" in heartbeat._COMMAND_EXECUTORS
     assert "set_display_mode" in heartbeat._COMMANDS_WITH_ARGS
+
+
+def test_applier_script_and_unit_ship():
+    """The executor is useless without the unit that does the work."""
+    unit = _ROOT / "build/live-build/config/includes.chroot/etc/systemd/system/bluebird-set-display-mode.service"
+    script = _ROOT / "build/live-build/config/includes.chroot/opt/bluebird-kiosk/bin/set-display-mode"
+    assert unit.is_file() and script.is_file()
+    body = script.read_text(encoding="utf-8")
+    # The mode check lives here because only this side can see the real mode list.
+    assert "is not advertised by this display" in body
+    # And it must persist, or the mode reverts on the next compositor restart.
+    assert "display-settings.json" in body
