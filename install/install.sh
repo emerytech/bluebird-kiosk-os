@@ -421,6 +421,34 @@ command = "sway --config /etc/sway/config"
 user = "bluebird-kiosk"
 EOF
 
+# greetd owns the graphical session ONLY until the kiosk is configured. After
+# firstboot writes /etc/bluebird/configured, bluebird-kiosk.service owns it (it
+# runs sway directly) and greetd must stay out of the way. This condition plus
+# the matching ConditionPathExists=/etc/bluebird/configured on
+# bluebird-kiosk.service make the two mutually exclusive.
+#
+# WITHOUT this drop-in both start on every boot of a configured box —
+# bluebird-gesture.service Wants= bluebird-kiosk.service, so the standby is
+# pulled into the boot regardless — and two sway instances fight over DRM
+# master: no frames reach any output, screens sit on the loading wallpaper or
+# black while the heartbeat keeps reporting the device healthy. That took the
+# NEN lobby kiosk down 2026-08-05/06. The live-build image has carried this
+# file since #36 (2026-06-24); install.sh never did, so every Ubuntu-installed
+# kiosk was exposed from that commit onward.
+#
+# Do NOT "simplify" this by masking greetd outright: on a fresh install the
+# marker does not exist yet, bluebird-kiosk.service is condition-skipped, and
+# with greetd gone there is no compositor at all — the box sits at a text
+# console. That is the exact failure #36 fixed.
+install -d /etc/systemd/system/greetd.service.d
+cat >/etc/systemd/system/greetd.service.d/10-bluebird-firstboot.conf <<'EOF'
+# BlueBird: greetd runs only while the kiosk is unconfigured (firstboot wizard).
+# Mirror of build/live-build/.../greetd.service.d/10-bluebird-firstboot.conf —
+# keep the two in sync.
+[Unit]
+ConditionPathExists=!/etc/bluebird/configured
+EOF
+
 # ── Unattended upgrades (security pocket only, 03:00 reboot window) ──────────
 log "configuring unattended-upgrades"
 cat >/etc/apt/apt.conf.d/52bluebird-unattended <<'EOF'
@@ -439,6 +467,18 @@ systemctl daemon-reload
 systemctl enable NetworkManager.service
 systemctl unmask greetd.service 2>/dev/null || true
 systemctl enable greetd.service
+# Self-heal a box that is ALREADY running the dual-compositor fault. The
+# condition drop-in above only takes effect at the next start, so an updated
+# box would otherwise stay broken until it reboots. Only act when the marker
+# says this kiosk is configured AND bluebird-kiosk.service is genuinely the
+# session owner — otherwise stopping greetd would kill the only compositor and
+# blank the screen.
+if [[ -e /etc/bluebird/configured ]] \
+   && systemctl is-active --quiet bluebird-kiosk.service \
+   && systemctl is-active --quiet greetd.service; then
+  log "healing dual-compositor: stopping greetd (bluebird-kiosk.service owns the session)"
+  systemctl stop greetd.service || true
+fi
 # Point /etc/systemd/system/display-manager.service at greetd explicitly —
 # graphical.target Wants display-manager.service, and we want our DM to be
 # greetd regardless of what other DM packages might leave behind.
