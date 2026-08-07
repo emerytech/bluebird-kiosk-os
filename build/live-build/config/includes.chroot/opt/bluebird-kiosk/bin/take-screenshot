@@ -69,10 +69,21 @@ trap 'rm -f "$TMP_PNG"' EXIT
 # (root) then redirects it into the temp file. Doing it this way avoids
 # the bluebird-kiosk user trying to write into a root-owned mktemp file
 # (which fails with EACCES — field-confirmed 2026-06-09 first run).
-if ! sudo -n -u bluebird-kiosk \
+# `timeout` is not optional here. grim with no -o captures EVERY output and blocks until
+# each one delivers a frame — so a single output that is not scanning out hangs this
+# forever. Field-confirmed 2026-08-06: one wedged HDMI connector left this service stuck
+# in `activating` for 1h53m, and every fleet-console "Screenshot now" after that queued
+# behind it. The backend gives up at 60s; the box never did. 25s is well clear of a
+# healthy multi-output capture while guaranteeing the timer's next fire finds us gone.
+if ! timeout -k 5 25 sudo -n -u bluebird-kiosk \
        env XDG_RUNTIME_DIR="$RUNTIME_DIR" WAYLAND_DISPLAY="$WAYLAND_SOCK" \
        grim -t png - > "$TMP_PNG" 2>/dev/null; then
-  log_warn "grim capture failed (sway socket=$RUNTIME_DIR/$WAYLAND_SOCK)"
+  rc=$?
+  if [[ "$rc" -eq 124 || "$rc" -eq 137 ]]; then
+    log_warn "grim timed out after 25s — an output is likely not scanning out (sway socket=$RUNTIME_DIR/$WAYLAND_SOCK)"
+  else
+    log_warn "grim capture failed rc=$rc (sway socket=$RUNTIME_DIR/$WAYLAND_SOCK)"
+  fi
   exit 0
 fi
 

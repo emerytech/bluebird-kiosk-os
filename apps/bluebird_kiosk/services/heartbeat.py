@@ -431,16 +431,44 @@ def _cmd_set_display_mode(args: Dict[str, Any]) -> Tuple[bool, str]:
 
 
 def _cmd_restart_kiosk() -> Tuple[bool, str]:
-    # Ubuntu installs run the session through greetd (the watchdog's
-    # field-proven heal path); Debian live-build images use
-    # bluebird-kiosk.service. Try greetd first, fall back.
-    ok, msg = _run_systemctl(["restart", "greetd"])
+    """Restart whichever unit actually owns the session — the one that is RUNNING.
+
+    This used to try greetd first and fall back. That is backwards on a configured box:
+    bluebird-kiosk.service owns the session there (greetd is condition-skipped once
+    /etc/bluebird/configured exists), so restarting greetd started a SECOND compositor
+    alongside the running one. Two sway instances then fought over DRM master and no frames
+    reached any output — the exact fault this button exists to clear. Field-confirmed during
+    the 2026-08-06/07 NEN lobby outage.
+
+    So: ask systemd which unit is active and restart that. Only fall back to trying both
+    when neither is active (nothing is driving the screen anyway, so there is no session to
+    duplicate).
+    """
+    kiosk_active = _run_systemctl(["is-active", "--quiet", "bluebird-kiosk.service"])[0]
+    greetd_active = _run_systemctl(["is-active", "--quiet", "greetd"])[0]
+
+    if kiosk_active and greetd_active:
+        # Already the dual-compositor fault. Drop greetd and keep the real launcher rather
+        # than restarting either — restarting would just re-race them.
+        _run_systemctl(["stop", "greetd"])
+        ok, msg = _run_systemctl(["restart", "bluebird-kiosk.service"])
+        return ok, ("two compositors were running; stopped greetd and restarted "
+                    "bluebird-kiosk.service: " + msg)
+    if kiosk_active:
+        ok, msg = _run_systemctl(["restart", "bluebird-kiosk.service"])
+        return ok, "restarted bluebird-kiosk.service: " + msg
+    if greetd_active:
+        ok, msg = _run_systemctl(["restart", "greetd"])
+        return ok, "restarted greetd: " + msg
+
+    # Neither is up — nothing to duplicate, so try the configured-box launcher first.
+    ok, msg = _run_systemctl(["restart", "bluebird-kiosk.service"])
     if ok:
-        return True, "restarted greetd: " + msg
-    ok2, msg2 = _run_systemctl(["restart", "bluebird-kiosk.service"])
+        return True, "restarted bluebird-kiosk.service: " + msg
+    ok2, msg2 = _run_systemctl(["restart", "greetd"])
     if ok2:
-        return True, "restarted bluebird-kiosk.service: " + msg2
-    return False, f"greetd: {msg} / bluebird-kiosk.service: {msg2}"
+        return True, "restarted greetd: " + msg2
+    return False, f"bluebird-kiosk.service: {msg} / greetd: {msg2}"
 
 
 _COMMAND_EXECUTORS = {
