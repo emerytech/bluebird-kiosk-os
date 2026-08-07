@@ -128,3 +128,20 @@ def test_restart_kiosk_heals_a_box_already_running_both(monkeypatch):
     assert ok
     assert ["stop", "greetd"] in calls
     assert "two compositors" in msg
+
+
+# ── updates must actually take effect ─────────────────────────────────────────
+
+def test_install_restarts_the_services_whose_code_it_replaced():
+    """`systemctl enable` is a no-op on an already-enabled unit, so on an UPDATE the new
+    code landed on disk while the OLD process kept running. The heartbeat holds the
+    remote-command executor map, so a freshly shipped command returned "unknown command"
+    until the box happened to reboot — field-confirmed 2026-08-07 with set_display_mode
+    against a 21-hour-old heartbeat process."""
+    body = _INSTALL_SH.read_text(encoding="utf-8")
+    assert "systemctl restart \"$_svc\"" in body, (
+        "install.sh does not restart updated services — kiosk-os updates that change Python "
+        "code will not take effect until the device reboots"
+    )
+    # The heartbeat is the one that actually bit us; make sure it is in the loop.
+    assert "bluebird-heartbeat.service bluebird-admin.service" in body
