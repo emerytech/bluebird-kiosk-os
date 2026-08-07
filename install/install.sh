@@ -512,6 +512,25 @@ systemctl enable bluebird-kiosk-sync.service
 # if the remote version differs from /etc/bluebird/kiosk-os.version, so
 # the typical 6h tick is a cheap no-op.
 systemctl enable bluebird-update.timer
+
+# Restart the long-running Python services whose CODE this run just replaced.
+#
+# `systemctl enable` is a no-op on an already-enabled unit, so on an UPDATE (bluebird-update
+# re-runs this script) the new code sat on disk while the OLD process kept running. That is
+# not cosmetic: the heartbeat holds the remote-command executor map, so a freshly shipped
+# command came back "unknown command" until the box happened to reboot. Field-confirmed
+# 2026-08-07 — set_display_mode shipped, the kiosk reported it unknown, and the heartbeat
+# process was 21 hours old.
+#
+# Restart rather than reload: these are plain Python services with no reload handler.
+# `|| true` because on a FIRST install some of these have never started and a restart of a
+# not-yet-running unit is fine to ignore.
+log "restarting updated services so the new code is actually live"
+for _svc in bluebird-heartbeat.service bluebird-admin.service bluebird-kiosk-sync.service bluebird-gesture.service; do
+  if systemctl is-enabled --quiet "$_svc" 2>/dev/null; then
+    systemctl restart "$_svc" 2>/dev/null || true
+  fi
+done
 # Screenshot capture timer — fires every 60s, uploads a PNG of the
 # current sway display to the fleet console. Pulls the license token
 # from /etc/bluebird/license.token; silently skips if absent (pre-
