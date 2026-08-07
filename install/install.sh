@@ -455,8 +455,17 @@ cat >/etc/apt/apt.conf.d/52bluebird-unattended <<'EOF'
 Unattended-Upgrade::Origins-Pattern {
     "origin=Debian,codename=${distro_codename},label=Debian-Security";
 };
-Unattended-Upgrade::Automatic-Reboot "true";
-Unattended-Upgrade::Automatic-Reboot-Time "03:00";
+# Automatic-Reboot OFF, deliberately. These are unattended school signage panels: an
+# auto-reboot at 03:00 is uncoordinated with the fleet, invisible to the console, and lands
+# the box in whatever latent boot bug it happens to be carrying. That is exactly how the
+# greetd dual-compositor landmine armed on the NEN lobby kiosk (2026-08-05) — the box had
+# run fine for days after the update and only broke on its first reboot.
+#
+# Security updates still INSTALL on schedule; they just apply on the next operator-initiated
+# reboot (fleet console "Reboot", or bluebird-update). /var/run/reboot-required still gets
+# written, and the heartbeat surfaces it, so a pending-reboot kiosk is visible rather than
+# silently self-rebooting overnight.
+Unattended-Upgrade::Automatic-Reboot "false";
 APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
 EOF

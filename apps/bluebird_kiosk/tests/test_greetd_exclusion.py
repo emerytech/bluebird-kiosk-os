@@ -78,3 +78,53 @@ def test_install_sh_heals_a_box_already_running_two_compositors():
     # ...but only when it is safe: configured marker present AND the kiosk unit active.
     assert "is-active --quiet bluebird-kiosk.service" in body
     assert "/etc/bluebird/configured" in body
+
+
+# ── restart_kiosk must not create the fault it exists to clear ────────────────
+
+def test_restart_kiosk_prefers_the_unit_that_is_actually_running(monkeypatch):
+    """It used to restart greetd FIRST and fall back. On a configured box
+    bluebird-kiosk.service owns the session (greetd is condition-skipped), so that started a
+    SECOND compositor alongside the running one — the exact dual-compositor fault the button
+    exists to clear. Field-confirmed during the 2026-08-06/07 NEN lobby outage."""
+    import sys
+    sys.path.insert(0, str(_ROOT / "apps"))
+    from bluebird_kiosk.services import heartbeat
+
+    calls = []
+
+    def fake_systemctl(args, timeout_s=None):
+        calls.append(list(args))
+        if args[:2] == ["is-active", "--quiet"]:
+            # kiosk unit active, greetd not — the normal configured-box state.
+            return (args[2] == "bluebird-kiosk.service"), "ok"
+        return True, "ok"
+
+    monkeypatch.setattr(heartbeat, "_run_systemctl", fake_systemctl)
+    ok, msg = heartbeat._cmd_restart_kiosk()
+    assert ok
+    assert "bluebird-kiosk.service" in msg
+    assert not any(c[:1] == ["restart"] and c[1] == "greetd" for c in calls), \
+        "must not restart greetd while bluebird-kiosk.service owns the session"
+
+
+def test_restart_kiosk_heals_a_box_already_running_both(monkeypatch):
+    """If both are somehow up, stop greetd rather than restarting either — restarting would
+    just re-race two compositors for DRM master."""
+    import sys
+    sys.path.insert(0, str(_ROOT / "apps"))
+    from bluebird_kiosk.services import heartbeat
+
+    calls = []
+
+    def fake_systemctl(args, timeout_s=None):
+        calls.append(list(args))
+        if args[:2] == ["is-active", "--quiet"]:
+            return True, "ok"          # BOTH active
+        return True, "ok"
+
+    monkeypatch.setattr(heartbeat, "_run_systemctl", fake_systemctl)
+    ok, msg = heartbeat._cmd_restart_kiosk()
+    assert ok
+    assert ["stop", "greetd"] in calls
+    assert "two compositors" in msg

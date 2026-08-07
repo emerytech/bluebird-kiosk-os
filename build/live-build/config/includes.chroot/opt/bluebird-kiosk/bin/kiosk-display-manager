@@ -110,6 +110,61 @@ def _write_inventory(outs: list) -> None:
         pass
 
 
+def _better_mode(o: dict) -> str:
+    """Pick a saner mode than sway did, or "" to leave it alone.
+
+    sway selects from EDID, and EDID lies by omission. The NEN lobby LG advertises
+    4096x2160 (DCI-4K) five times and flags NO preferred mode; the SMART IFP on the same
+    box flags none either. With nothing marked preferred the choice is effectively
+    arbitrary, and landing on DCI-4K means the kiosk drives an output the panel cannot
+    lock: "No Signal" on the glass while every health signal upstream reads green. That
+    cost two days on 2026-08-06/07.
+
+    Two rules, both conservative — we only ever move to a mode the sink itself advertises:
+
+      1. Never sit on 4096-wide when the same output also offers 3840-wide. No signage
+         panel wants DCI-4K, and every UHD panel that offers it also offers UHD.
+      2. Prefer a >=50Hz mode at the same width over a <=30Hz one. 4K30 is legal but
+         makes a touch panel feel broken, and 30Hz is where flaky links tend to fail.
+
+    Returns "" when the current mode is already fine, so steady state issues no commands.
+    """
+    cur = _mode_str(o)
+    if not cur:
+        return ""
+    modes = []
+    for m in (o.get("modes") or []):
+        w, h, r = m.get("width"), m.get("height"), m.get("refresh")
+        if not w or not h:
+            continue
+        modes.append((int(w), int(h), round(int(r or 0) / 1000)))
+    if not modes:
+        return ""
+
+    try:
+        cur_res, _, cur_hz_s = cur.partition("@")
+        cur_w, _, cur_h = cur_res.partition("x")
+        cur_w, cur_h = int(cur_w), int(cur_h)
+        cur_hz = int("".join(ch for ch in cur_hz_s if ch.isdigit()) or 0)
+    except (TypeError, ValueError):
+        return ""
+
+    # Rule 1: DCI-4K -> UHD when the sink offers it.
+    if cur_w == 4096:
+        uhd = [m for m in modes if m[0] == 3840]
+        if uhd:
+            best = max(uhd, key=lambda m: (m[2] >= 50, m[2]))
+            return "%dx%d@%dHz" % best
+
+    # Rule 2: low refresh -> a >=50Hz mode at the same width, if one exists.
+    if cur_hz and cur_hz <= 30:
+        same_w = [m for m in modes if m[0] == cur_w and m[2] >= 50]
+        if same_w:
+            best = max(same_w, key=lambda m: m[2])
+            return "%dx%d@%dHz" % best
+    return ""
+
+
 def reconcile(mirror: bool, restored: set) -> None:
     saved_outs = (_load_saved().get("outputs") or {})
     outs = _outputs()
@@ -135,6 +190,13 @@ def reconcile(mirror: bool, restored: set) -> None:
             m = s.get("mode")
             if m:
                 _sway("output", name, "mode", str(m))
+            restored.add(name)
+        elif name not in restored:
+            # No operator-saved mode for this output. Sway picked from EDID, which may have
+            # handed it something the panel cannot display — correct that once per appearance.
+            better = _better_mode(o)
+            if better:
+                _sway("output", name, "mode", better)
             restored.add(name)
     restored.intersection_update(present)            # drop unplugged outputs so a re-plug re-applies
     _write_inventory(outs)                           # publish for the heartbeat to report
