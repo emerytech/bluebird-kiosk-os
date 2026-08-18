@@ -106,10 +106,19 @@ fi
 
 # Per-output Beacon URL (independent mode) — like KIOSK_URL but treated as a cloud target so
 # kiosk_cache=1 still gets appended below (which arms the emergency takeover on that screen).
+# KIOSK_OUTPUT_CAST=1 marks an admin-cast THIRD-PARTY URL (Screens pane "Cast a URL"): the page
+# is a foreign origin, so ?kiosk_cache=1 would be inert (no shim in the page) and can break
+# strict/signed URLs — don't arm. Emergency preemption for cast outputs is handled OUTSIDE the
+# page, by the reconcile loop in launch-kiosk-independent (it swaps the output to the Legacy
+# Wall while an incident is active).
 KIOSK_OUTPUT_ARM=""
 if [[ -n "${KIOSK_OUTPUT_URL:-}" ]]; then
   URL="$KIOSK_OUTPUT_URL"
-  KIOSK_OUTPUT_ARM=1
+  if [[ "${KIOSK_OUTPUT_CAST:-}" == "1" ]]; then
+    KIOSK_OUTPUT_ARM=""
+  else
+    KIOSK_OUTPUT_ARM=1
+  fi
 fi
 
 # Cloud Legacy Wall reads ?kiosk_cache=1 and (via a small inline JS
@@ -241,6 +250,14 @@ fi
 #       can't drive headlessly). Without this, the cache extension
 #       below loads to nowhere and the kiosk still hits cloud for every
 #       image. Field-confirmed 2026-06-04.
+# Cast pages are usually video (YouTube, a slide deck with embedded media): without this flag
+# Chromium blocks autoplay-with-sound until a user gesture, and a kiosk has no user. Cast-only —
+# the boards don't autoplay media and don't get the wider policy.
+CAST_FLAGS=""
+if [[ "${KIOSK_OUTPUT_CAST:-}" == "1" ]]; then
+  CAST_FLAGS="--autoplay-policy=no-user-gesture-required"
+fi
+
 exec /usr/bin/chromium \
   --kiosk \
   --ozone-platform=wayland \
@@ -257,4 +274,5 @@ exec /usr/bin/chromium \
   --user-agent="${DEFAULT_UA} ${UA_SUFFIX}" \
   --allow-running-insecure-content \
   --disk-cache-size=104857600 \
+  ${CAST_FLAGS} \
   --app="$URL"
