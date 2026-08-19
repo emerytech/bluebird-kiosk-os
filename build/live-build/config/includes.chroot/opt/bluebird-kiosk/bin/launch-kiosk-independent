@@ -121,6 +121,72 @@ except OSError:
 " 2>/dev/null
 }
 
+# Is an emergency incident active for this kiosk's tenant? Reads the LOCAL cached state the
+# incident poller mirrors to the loopback server (3 s poll, fails closed to inactive) — the
+# same source the in-page takeover uses. Cast pages are foreign origins that can't render the
+# takeover modal, so while an incident is active the reconcile loop swaps any cast output to
+# the Legacy Wall (which carries the modal) and swaps it back after the all-clear.
+_incident_active() {
+  /usr/bin/python3 -c "
+import json, sys, urllib.request
+try:
+    r = urllib.request.urlopen('http://127.0.0.1:7311/legacy-wall/api/active-incident', timeout=2)
+    d = json.load(r)
+    sys.exit(0 if d.get('active') else 1)
+except Exception:
+    sys.exit(1)
+" 2>/dev/null
+}
+
+# Desired-vs-running convergence: each output's Chromium records the spec it was launched with
+# (mode|url) in a runtime file; when the heartbeat rewrites display-content.json (a cast starts,
+# switches, expires, or is cleared) or the incident override flips, the spec drifts and we kill
+# just THAT output's Chromium — the normal relaunch path below brings it up on the new target in
+# the same pass. This is what lets the heartbeat skip a full session restart for URL-only changes.
+_spec_path() { printf '/var/lib/bluebird-kiosk/output-spec-%s' "$1"; }
+
+# Effective launch spec for an output: "mode|url" after the cast/incident rules.
+#   _resolve_spec <output> <incident(0/1)>
+# mode "url" (an admin cast) degrades to legacy_wall when the URL is missing OR an
+# incident is active — the Legacy Wall carries the takeover modal, a foreign page can't.
+_resolve_spec() {
+  local mode url
+  mode=$(_field "$1" mode); url=$(_field "$1" url)
+  [[ -z "$mode" ]] && mode=legacy_wall
+  if [[ "$mode" == "url" && ( -z "$url" || "${2:-0}" == "1" ) ]]; then
+    mode=legacy_wall; url=""
+  fi
+  printf '%s|%s' "$mode" "$url"
+}
+
+# Fast emergency preemption: when an incident is active, get untrusted cast pages OFF every
+# screen IMMEDIATELY. A cast page is a foreign origin that cannot render the in-page takeover
+# modal, so the ONLY way it shows the emergency is for this loop to swap it to the Legacy Wall.
+# The per-output relaunch below is serial and blocks up to ~40s per output waiting for the new
+# window to paint; letting an incident queue behind that could keep a foreign page on a second
+# cast screen for a minute-plus during an emergency. So kill ALL cast-output Chromiums up front
+# here in one non-blocking pass (kill is near-instant); the per-output loop then relaunches each
+# to the Legacy Wall. A brief black frame during the relaunch is acceptable — a live foreign page
+# with no takeover modal during an emergency is not.
+_preempt_casts_on_incident() {
+  _incident_active || return 0
+  local outs n safe profile
+  outs=$(python3 -c "import json
+try: d=json.load(open('$CONTENT')).get('outputs',{})
+except Exception: d={}
+for n,o in d.items():
+    if (o or {}).get('mode')=='url': print(n)" 2>/dev/null)
+  for n in $outs; do
+    safe=$(printf '%s' "$n" | tr -c 'A-Za-z0-9' '_')
+    profile="/var/lib/bluebird-kiosk/kiosk-chromium-$safe"
+    if pgrep -f -- "--user-data-dir=$profile" >/dev/null 2>&1; then
+      log "incident active — preempting cast on $n (killing foreign page)"
+      pkill -f -- "--user-data-dir=$profile" >/dev/null 2>&1 || true
+      rm -f "$(_spec_path "$safe")" 2>/dev/null || true   # force a clean relaunch to legacy_wall
+    fi
+  done
+}
+
 _map_touch() {
   # Map the touchscreen to the Legacy-Wall output. In side-by-side (independent) mode sway
   # otherwise spreads touch across the whole desktop, so taps on the built-in panel land on the
@@ -141,8 +207,12 @@ else:
 }
 
 reconcile() {
-  local names name safe profile mode url before after new i title wflag
+  local names name safe profile mode url before after new i title wflag incident spec specfile
   local -a health_rows=()
+  # Emergency preemption FIRST: kill any foreign cast page on every screen up front, before the
+  # serial/blocking per-output relaunch below — so no cast screen keeps a takeover-less page
+  # waiting behind another output's ~40s relaunch. (Non-blocking; only acts when incident active.)
+  _preempt_casts_on_incident
   names=$(swaymsg -t get_outputs 2>/dev/null | python3 -c "import sys,json
 try: d=json.load(sys.stdin)
 except Exception: d=[]
@@ -150,6 +220,32 @@ except Exception: d=[]
   for name in $names; do
     safe=$(printf '%s' "$name" | tr -c 'A-Za-z0-9' '_')
     profile="/var/lib/bluebird-kiosk/kiosk-chromium-$safe"
+
+    # ── Desired spec for this output (cast-aware, incident-aware) ──
+    # Re-sample the incident state PER OUTPUT: a whole pass can take tens of seconds, so an
+    # incident that fires mid-pass still flips the remaining outputs' casts to the Legacy Wall.
+    incident=0
+    _incident_active && incident=1
+    spec=$(_resolve_spec "$name" "$incident")
+    mode="${spec%%|*}"; url="${spec#*|}"
+    specfile=$(_spec_path "$safe")
+
+    # ── Converge a running Chromium whose launch spec drifted (cast started / switched /
+    # expired / cleared, or the incident override flipped): kill it here, and the relaunch
+    # block below brings it up on the new target in this same pass. ──
+    if pgrep -f -- "--user-data-dir=$profile" >/dev/null 2>&1; then
+      if [[ "$(cat "$specfile" 2>/dev/null)" != "$spec" ]]; then
+        log "output $name spec changed -> relaunching (incident=$incident)"
+        pkill -f -- "--user-data-dir=$profile" >/dev/null 2>&1 || true
+        # Chromium releases the profile's SingletonLock on exit; a fresh launch against a
+        # still-held profile DEFERS to the dying instance and never shows the new URL
+        # (field-measured in Couchside 2026-07-27). Wait briefly for the lock to clear.
+        for i in $(seq 1 20); do
+          [[ -e "$profile/SingletonLock" ]] || break
+          sleep 0.5
+        done
+      fi
+    fi
 
     # ── Per-output wedged-page self-heal (only meaningful when a Chromium exists for this output) ──
     title=""
@@ -171,15 +267,19 @@ except Exception: d=[]
     wflag=0; [[ ${WEDGED_STREAK[$name]:-0} -gt 0 ]] && wflag=1
     health_rows+=("$(printf '%s\t%s\t%s\t%s' "$name" "$wflag" "${WEDGED_RELOADS[$name]:-0}" "$title")")
 
-    # ── (Re)launch when there's no Chromium for this output (crash, hotplug, or the wedged-kill) ──
+    # ── (Re)launch when there's no Chromium for this output (crash, hotplug, wedged-kill,
+    # or the spec-drift kill above). mode/url were already resolved (cast/incident-aware). ──
     if pgrep -f -- "--user-data-dir=$profile" >/dev/null 2>&1; then
       continue   # already a Chromium for this output
     fi
-    mode=$(_field "$name" mode); url=$(_field "$name" url)
-    [[ -z "$mode" ]] && mode=legacy_wall
+    printf '%s' "$spec" > "$specfile" 2>/dev/null || true
     before=$(_chromium_ids | sort -u)
     if [[ "$mode" == "signage" && -n "$url" ]]; then
       KIOSK_PROFILE_OVERRIDE="$profile" KIOSK_OUTPUT_URL="$url" "$LAUNCHER" >/dev/null 2>&1 &
+    elif [[ "$mode" == "url" && -n "$url" ]]; then
+      # Admin cast (Screens pane): third-party URL, no takeover arming (the reconcile loop
+      # preempts cast outputs itself while an incident is active — see _incident_active).
+      KIOSK_PROFILE_OVERRIDE="$profile" KIOSK_OUTPUT_URL="$url" KIOSK_OUTPUT_CAST=1 "$LAUNCHER" >/dev/null 2>&1 &
     else
       KIOSK_PROFILE_OVERRIDE="$profile" KIOSK_FORCE_LEGACY_WALL=1 "$LAUNCHER" >/dev/null 2>&1 &
     fi

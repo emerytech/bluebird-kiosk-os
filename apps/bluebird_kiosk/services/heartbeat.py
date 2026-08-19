@@ -642,10 +642,18 @@ def _apply_output_assignments(oa: Any) -> None:
             for name, a in oa.items():
                 if not isinstance(a, dict):
                     continue
-                if str(a.get("mode") or "") == "signage":
+                mode = str(a.get("mode") or "")
+                if mode == "signage":
                     url = config.derive_beacon_url(
                         backend, str(a.get("slug") or ""), str(a.get("public_key") or ""))
                     entry = ({"mode": "signage", "url": url} if url
+                             else {"mode": "legacy_wall", "url": ""})
+                elif mode == "url":
+                    # Admin cast (Screens pane "Cast a URL"): the cloud already validated the
+                    # scheme, but re-check here — this string goes straight into Chromium.
+                    raw = str(a.get("url") or "")
+                    entry = ({"mode": "url", "url": raw}
+                             if raw.startswith(("http://", "https://"))
                              else {"mode": "legacy_wall", "url": ""})
                 else:
                     entry = {"mode": "legacy_wall", "url": ""}
@@ -658,10 +666,26 @@ def _apply_output_assignments(oa: Any) -> None:
                 cur = None
             if cur_layout == "independent" and cur == content:
                 return  # no change — don't churn / restart
+            # URL-only change (same outputs, same touch map, only mode/url differ — a cast
+            # started / switched / expired / cleared): just rewrite the file. The reconcile
+            # loop in launch-kiosk-independent notices the spec drift and cycles ONLY the
+            # affected output's Chromium (≤15 s) — no full session restart, the other
+            # screens never blink. A restart is still required when the output SET or the
+            # touch map changes (session-start concerns: window placement, touch mapping).
+            urls_only = (
+                cur_layout == "independent" and isinstance(cur, dict)
+                and set(cur.keys()) == set(content.keys())
+                and all(bool((cur.get(k) or {}).get("touch")) == bool(content[k].get("touch"))
+                        for k in content)
+            )
             _CONTENT_PATH.parent.mkdir(parents=True, exist_ok=True)
             tmp = _CONTENT_PATH.with_suffix(".json.tmp")
             tmp.write_text(json.dumps({"outputs": content}), encoding="utf-8")
             tmp.replace(_CONTENT_PATH)
+            if urls_only:
+                logger.info("heartbeat: per-output content url change (%d outputs) — "
+                            "reconcile loop will converge without a restart", len(content))
+                return
             config.write_config({"DISPLAY_LAYOUT": "independent"})
             logger.info("heartbeat: per-output content (%d outputs) — restarting kiosk", len(content))
             _cmd_restart_kiosk()

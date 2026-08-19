@@ -79,6 +79,93 @@ def test_apply_output_assignments_noop_when_unchanged(tmp_path, monkeypatch):
     assert not restarts   # identical -> no churn / no restart
 
 
+# ── Casts (mode:'url' — Screens pane "Cast a URL") ────────────────────────────
+
+def test_apply_output_assignments_cast_url_passthrough(tmp_path, monkeypatch):
+    monkeypatch.setattr(hb, "_CONTENT_PATH", tmp_path / "display-content.json")
+    written, restarts = {}, []
+    monkeypatch.setattr(hb.config, "read_config",
+                        lambda: {"BLUEBIRD_BACKEND": "x", "DISPLAY_LAYOUT": "mirror"})
+    monkeypatch.setattr(hb.config, "write_config", lambda v: written.update(v))
+    monkeypatch.setattr(hb, "_cmd_restart_kiosk", lambda: (restarts.append(1), (True, "ok"))[1])
+    hb._apply_output_assignments({
+        "DP-1": {"mode": "url", "url": "https://docs.google.com/presentation/d/x/embed"},
+    })
+    content = json.loads(
+        (tmp_path / "display-content.json").read_text(encoding="utf-8"))["outputs"]
+    assert content["DP-1"] == {
+        "mode": "url", "url": "https://docs.google.com/presentation/d/x/embed", "touch": False}
+    # first flip mirror -> independent still needs the session restart
+    assert written.get("DISPLAY_LAYOUT") == "independent" and restarts
+
+
+def test_apply_output_assignments_cast_bad_scheme_degrades(tmp_path, monkeypatch):
+    monkeypatch.setattr(hb, "_CONTENT_PATH", tmp_path / "display-content.json")
+    monkeypatch.setattr(hb.config, "read_config",
+                        lambda: {"BLUEBIRD_BACKEND": "x", "DISPLAY_LAYOUT": "mirror"})
+    monkeypatch.setattr(hb.config, "write_config", lambda v: None)
+    monkeypatch.setattr(hb, "_cmd_restart_kiosk", lambda: (True, "ok"))
+    hb._apply_output_assignments({
+        "DP-1": {"mode": "url", "url": "javascript:alert(1)"},
+        "DP-2": {"mode": "url", "url": ""},
+    })
+    content = json.loads(
+        (tmp_path / "display-content.json").read_text(encoding="utf-8"))["outputs"]
+    assert content["DP-1"]["mode"] == "legacy_wall"
+    assert content["DP-2"]["mode"] == "legacy_wall"
+
+
+def test_apply_output_assignments_url_only_change_skips_restart(tmp_path, monkeypatch):
+    f = tmp_path / "display-content.json"
+    f.write_text(json.dumps({"outputs": {
+        "DP-1": {"mode": "legacy_wall", "url": "", "touch": False}}}), encoding="utf-8")
+    monkeypatch.setattr(hb, "_CONTENT_PATH", f)
+    written, restarts = {}, []
+    monkeypatch.setattr(hb.config, "read_config",
+                        lambda: {"BLUEBIRD_BACKEND": "x", "DISPLAY_LAYOUT": "independent"})
+    monkeypatch.setattr(hb.config, "write_config", lambda v: written.update(v))
+    monkeypatch.setattr(hb, "_cmd_restart_kiosk", lambda: (restarts.append(1), (True, "ok"))[1])
+    hb._apply_output_assignments({
+        "DP-1": {"mode": "url", "url": "https://example.com/deck"},
+    })
+    content = json.loads(f.read_text(encoding="utf-8"))["outputs"]
+    assert content["DP-1"]["mode"] == "url"          # file rewritten…
+    assert not restarts and not written               # …but no restart, no config churn
+
+
+def test_apply_output_assignments_output_set_change_still_restarts(tmp_path, monkeypatch):
+    f = tmp_path / "display-content.json"
+    f.write_text(json.dumps({"outputs": {
+        "DP-1": {"mode": "legacy_wall", "url": "", "touch": False}}}), encoding="utf-8")
+    monkeypatch.setattr(hb, "_CONTENT_PATH", f)
+    restarts = []
+    monkeypatch.setattr(hb.config, "read_config",
+                        lambda: {"BLUEBIRD_BACKEND": "x", "DISPLAY_LAYOUT": "independent"})
+    monkeypatch.setattr(hb.config, "write_config", lambda v: None)
+    monkeypatch.setattr(hb, "_cmd_restart_kiosk", lambda: (restarts.append(1), (True, "ok"))[1])
+    hb._apply_output_assignments({
+        "DP-1": {"mode": "url", "url": "https://example.com/deck"},
+        "HDMI-A-1": {"mode": "legacy_wall"},          # new output appears -> placement restart
+    })
+    assert restarts
+
+
+def test_apply_output_assignments_touch_change_still_restarts(tmp_path, monkeypatch):
+    f = tmp_path / "display-content.json"
+    f.write_text(json.dumps({"outputs": {
+        "DP-1": {"mode": "legacy_wall", "url": "", "touch": False}}}), encoding="utf-8")
+    monkeypatch.setattr(hb, "_CONTENT_PATH", f)
+    restarts = []
+    monkeypatch.setattr(hb.config, "read_config",
+                        lambda: {"BLUEBIRD_BACKEND": "x", "DISPLAY_LAYOUT": "independent"})
+    monkeypatch.setattr(hb.config, "write_config", lambda v: None)
+    monkeypatch.setattr(hb, "_cmd_restart_kiosk", lambda: (restarts.append(1), (True, "ok"))[1])
+    hb._apply_output_assignments({
+        "DP-1": {"mode": "legacy_wall", "touch": True},   # touch map changed -> restart
+    })
+    assert restarts
+
+
 # ── Tier 4: per-output render health (which screen is wedged) ──────────────────
 
 def test_collect_output_health_reads_and_clamps(tmp_path, monkeypatch):
