@@ -250,11 +250,23 @@ fi
 #       can't drive headlessly). Without this, the cache extension
 #       below loads to nowhere and the kiosk still hits cloud for every
 #       image. Field-confirmed 2026-06-04.
-# Cast pages are usually video (YouTube, a slide deck with embedded media): without this flag
-# Chromium blocks autoplay-with-sound until a user gesture, and a kiosk has no user. Cast-only —
-# the boards don't autoplay media and don't get the wider policy.
+# First-party pages (Legacy Wall / Beacon) disable Chromium's Private/Local Network Access
+# checks + allow insecure content so the kiosk_cache shim can fetch http://127.0.0.1:7311
+# images from the HTTPS cloud page, and load the bundled cache extension.
+DISABLE_FEATURES="TranslateUI,BlockInsecurePrivateNetworkRequests,PrivateNetworkAccessSendPreflights,PrivateNetworkAccessRespectPreflightResults,LocalNetworkAccessChecks,LocalNetworkAccess,DisableLoadExtensionCommandLineSwitch"
+INSECURE_FLAG="--allow-running-insecure-content"
 CAST_FLAGS=""
 if [[ "${KIOSK_OUTPUT_CAST:-}" == "1" ]]; then
+  # A CAST is an UNTRUSTED third-party page (Screens pane "Cast a URL"). It does NOT use the
+  # kiosk_cache shim, so it needs none of the localhost affordances above — and it MUST NOT get
+  # them: with Private/Local Network Access checks disabled, a cast page could reach the kiosk's
+  # own loopback admin server (e.g. POST http://127.0.0.1:7311/admin/kiosk/open-overlay, which
+  # mints a pre-authed device-admin session). So a cast keeps PNA/LNA protections ON, drops
+  # --allow-running-insecure-content, and does not load the cache extension. It only gets the
+  # autoplay policy (cast pages are usually video; a kiosk has no user to satisfy the gesture gate).
+  DISABLE_FEATURES="TranslateUI"
+  INSECURE_FLAG=""
+  EXT_FLAG=""
   CAST_FLAGS="--autoplay-policy=no-user-gesture-required"
 fi
 
@@ -265,14 +277,14 @@ exec /usr/bin/chromium \
   --no-first-run \
   --disable-pinch \
   --overscroll-history-navigation=0 \
-  --disable-features=TranslateUI,BlockInsecurePrivateNetworkRequests,PrivateNetworkAccessSendPreflights,PrivateNetworkAccessRespectPreflightResults,LocalNetworkAccessChecks,LocalNetworkAccess,DisableLoadExtensionCommandLineSwitch \
+  --disable-features="$DISABLE_FEATURES" \
   --password-store=basic \
   --check-for-update-interval=604800 \
   --start-fullscreen \
   --user-data-dir="$KIOSK_PROFILE_DIR" \
   ${EXT_FLAG} \
   --user-agent="${DEFAULT_UA} ${UA_SUFFIX}" \
-  --allow-running-insecure-content \
+  ${INSECURE_FLAG} \
   --disk-cache-size=104857600 \
   ${CAST_FLAGS} \
   --app="$URL"
