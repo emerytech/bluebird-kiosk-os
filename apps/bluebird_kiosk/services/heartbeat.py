@@ -703,33 +703,46 @@ def _apply_output_assignments(oa: Any) -> None:
 
 
 def _apply_display_assignment(assignment: Any) -> None:
-    """Translate a Beacon `display_assignment` (bearer heartbeats only) into
+    """Translate a Beacon/visitor `display_assignment` (bearer heartbeats only) into
     kiosk.conf so launch-kiosk-chromium picks the right URL on its next start:
       • {mode:'signage', slug, public_key} -> DISPLAY_MODE=signage + SIGNAGE_URL
-      • null / non-signage              -> DISPLAY_MODE=legacy_wall (revert)
+      • {mode:'visitor', slug}             -> DISPLAY_MODE=visitor + VISITOR_URL (VMS 2b)
+      • null / other                       -> DISPLAY_MODE=legacy_wall (revert)
 
-    Only when the effective mode OR url CHANGES do we rewrite the config and queue
-    a kiosk restart so Chromium reloads onto the new target — we do NOT hot-swap a
-    live URL, and we must NOT restart on every heartbeat. Best-effort: any failure
-    is logged and never breaks the heartbeat or the emergency loopback."""
+    Writes all three keys every time so switching modes cleanly sets the active URL
+    and clears the others. Only when the effective mode OR either url CHANGES do we
+    rewrite the config and queue a kiosk restart so Chromium reloads onto the new
+    target — we do NOT hot-swap a live URL, and we must NOT restart on every heartbeat.
+    Best-effort: any failure is logged and never breaks the heartbeat or the emergency
+    loopback."""
     try:
         cfg = config.read_config()
         backend = cfg.get("BLUEBIRD_BACKEND") or ""
         cur_mode = cfg.get("DISPLAY_MODE") or "legacy_wall"
-        cur_url = cfg.get("SIGNAGE_URL") or ""
-        if isinstance(assignment, dict) and str(assignment.get("mode") or "") == "signage":
-            new_url = config.derive_beacon_url(
+        cur_signage = cfg.get("SIGNAGE_URL") or ""
+        cur_visitor = cfg.get("VISITOR_URL") or ""
+        mode = str(assignment.get("mode") or "") if isinstance(assignment, dict) else ""
+        new_signage = ""
+        new_visitor = ""
+        if mode == "signage":
+            new_signage = config.derive_beacon_url(
                 backend, str(assignment.get("slug") or ""), str(assignment.get("public_key") or ""))
-            new_mode = "signage" if new_url else "legacy_wall"
+            new_mode = "signage" if new_signage else "legacy_wall"
+        elif mode == "visitor":
+            new_visitor = config.derive_visitor_url(backend, str(assignment.get("slug") or ""))
+            new_mode = "visitor" if new_visitor else "legacy_wall"
         else:
-            new_url = ""
             new_mode = "legacy_wall"
-        if new_mode == cur_mode and new_url == cur_url:
+        if new_mode == cur_mode and new_signage == cur_signage and new_visitor == cur_visitor:
             return  # no change — never churn the config or restart
-        config.write_config({"DISPLAY_MODE": new_mode, "SIGNAGE_URL": new_url})
+        config.write_config({
+            "DISPLAY_MODE": new_mode,
+            "SIGNAGE_URL": new_signage,
+            "VISITOR_URL": new_visitor,
+        })
         logger.info(
-            "heartbeat: display mode %s -> %s (url=%s) — restarting kiosk",
-            cur_mode, new_mode, new_url or "(none)")
+            "heartbeat: display mode %s -> %s (signage=%s visitor=%s) — restarting kiosk",
+            cur_mode, new_mode, new_signage or "(none)", new_visitor or "(none)")
         _cmd_restart_kiosk()
     except Exception as exc:  # noqa: BLE001 — heartbeat must survive any failure here
         logger.warning("heartbeat: could not apply display assignment: %s", exc)

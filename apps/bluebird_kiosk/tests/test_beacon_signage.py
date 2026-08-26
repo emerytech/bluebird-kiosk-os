@@ -89,3 +89,54 @@ def test_unresolvable_signage_assignment_does_not_switch():
     writes, restarts = _run_apply(cfg, {"mode": "signage", "slug": "nen", "public_key": ""})
     assert writes == {}
     assert restarts == 0
+
+
+# ── VMS Phase 2b — visitor mode (dashboard "designate as visitor kiosk") ──────
+
+def test_visitor_assignment_writes_conf_and_restarts():
+    cfg = {"BLUEBIRD_BACKEND": "https://bluebird-alerts.com",
+           "DISPLAY_MODE": "legacy_wall", "SIGNAGE_URL": "", "VISITOR_URL": ""}
+    writes, restarts = _run_apply(cfg, {"mode": "visitor", "slug": "nen"})
+    assert writes["DISPLAY_MODE"] == "visitor"
+    assert writes["VISITOR_URL"] == "https://bluebird-alerts.com/nen/visitor-kiosk"
+    assert writes["SIGNAGE_URL"] == ""   # cleared
+    assert restarts == 1
+
+
+def test_switch_signage_to_visitor_clears_signage():
+    cfg = {"BLUEBIRD_BACKEND": "https://bluebird-alerts.com",
+           "DISPLAY_MODE": "signage", "SIGNAGE_URL": "https://bluebird-alerts.com/nen/beacon/d/k",
+           "VISITOR_URL": ""}
+    writes, restarts = _run_apply(cfg, {"mode": "visitor", "slug": "nen"})
+    assert writes["DISPLAY_MODE"] == "visitor"
+    assert writes["VISITOR_URL"] == "https://bluebird-alerts.com/nen/visitor-kiosk"
+    assert writes["SIGNAGE_URL"] == ""
+    assert restarts == 1
+
+
+def test_visitor_no_change_no_restart():
+    url = "https://bluebird-alerts.com/nen/visitor-kiosk"
+    cfg = {"BLUEBIRD_BACKEND": "https://bluebird-alerts.com",
+           "DISPLAY_MODE": "visitor", "SIGNAGE_URL": "", "VISITOR_URL": url}
+    writes, restarts = _run_apply(cfg, {"mode": "visitor", "slug": "nen"})
+    assert writes == {}
+    assert restarts == 0
+
+
+def test_null_reverts_visitor_to_legacy_wall():
+    cfg = {"BLUEBIRD_BACKEND": "https://bluebird-alerts.com",
+           "DISPLAY_MODE": "visitor", "SIGNAGE_URL": "",
+           "VISITOR_URL": "https://bluebird-alerts.com/nen/visitor-kiosk"}
+    writes, restarts = _run_apply(cfg, None)
+    assert writes["DISPLAY_MODE"] == "legacy_wall"
+    assert writes["VISITOR_URL"] == ""
+    assert restarts == 1
+
+
+def test_unresolvable_visitor_assignment_does_not_switch():
+    # A visitor assignment with no slug derives an empty URL -> stays legacy_wall.
+    cfg = {"BLUEBIRD_BACKEND": "https://x", "DISPLAY_MODE": "legacy_wall",
+           "SIGNAGE_URL": "", "VISITOR_URL": ""}
+    writes, restarts = _run_apply(cfg, {"mode": "visitor", "slug": ""})
+    assert writes == {}
+    assert restarts == 0
