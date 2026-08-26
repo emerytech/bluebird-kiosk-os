@@ -41,6 +41,11 @@ _DEFAULTS: Dict[str, str] = {
     # launch-kiosk-chromium. An unbound kiosk stays in legacy_wall mode untouched.
     "DISPLAY_MODE": "legacy_wall",
     "SIGNAGE_URL": "",
+    # VMS Phase 2b — visitor check-in kiosk. DISPLAY_MODE="visitor" + VISITOR_URL (the
+    # cloud /{slug}/visitor-kiosk page) render the check-in page, armed like signage so
+    # the emergency takeover still fires. Set in kiosk.conf for a dedicated visitor kiosk
+    # (derive_visitor_url computes it from BLUEBIRD_BACKEND + SCHOOL_SLUG).
+    "VISITOR_URL": "",
 }
 
 
@@ -117,6 +122,18 @@ def derive_legacy_wall_url(backend: str, slug: str) -> str:
     if not backend or not slug:
         return ""
     return f"{backend}/{slug}/legacy-wall"
+
+
+def derive_visitor_url(backend: str, slug: str) -> str:
+    """Return the cloud visitor check-in URL a visitor-mode kiosk loads
+    (VMS Phase 2b): `<backend>/<slug>/visitor-kiosk`. The launcher appends
+    ?kiosk_cache=1 (arming the emergency takeover); the page's check-in POST
+    goes to the on-device loopback proxy which injects the license bearer."""
+    backend = (backend or "").rstrip("/")
+    slug = (slug or "").strip("/")
+    if not backend or not slug:
+        return ""
+    return f"{backend}/{slug}/visitor-kiosk"
 
 
 def derive_beacon_url(backend: str, slug: str, public_key: str) -> str:

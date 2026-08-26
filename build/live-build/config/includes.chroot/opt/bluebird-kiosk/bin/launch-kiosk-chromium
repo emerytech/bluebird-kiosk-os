@@ -30,6 +30,12 @@ CLOUD_URL="${LEGACY_WALL_URL:-}"
 # unbound kiosk leaves DISPLAY_MODE=legacy_wall and these are inert.
 DISPLAY_MODE="${DISPLAY_MODE:-legacy_wall}"
 SIGNAGE_URL="${SIGNAGE_URL:-}"
+# VMS Phase 2b — visitor check-in kiosk: DISPLAY_MODE=visitor + VISITOR_URL (set in
+# kiosk.conf) render the cloud /{slug}/visitor-kiosk page, armed like signage
+# (kiosk_cache=1) so the emergency takeover still fires AND the on-device check-in
+# proxy (POST 127.0.0.1:7311/legacy-wall/api/visitor/checkin) is reachable. Default it
+# so `set -eu` doesn't abort on older configs that predate the key.
+VISITOR_URL="${VISITOR_URL:-}"
 
 # Per-output independent mode (set by launch-kiosk-independent, one launch per screen):
 #   KIOSK_FORCE_LEGACY_WALL=1  → ignore the single binding, resolve the Legacy Wall (probe+fallback)
@@ -65,7 +71,9 @@ done
 # use it for visual parity; else fall back to the local renderer. The operator
 # KIOSK_URL override (below) still wins over both.
 URL="$LOCAL_URL"
-if [[ "$DISPLAY_MODE" == "signage" && -n "$SIGNAGE_URL" ]]; then
+if [[ "$DISPLAY_MODE" == "visitor" && -n "$VISITOR_URL" ]]; then
+  URL="$VISITOR_URL"
+elif [[ "$DISPLAY_MODE" == "signage" && -n "$SIGNAGE_URL" ]]; then
   URL="$SIGNAGE_URL"
 elif [[ -n "$CLOUD_URL" ]]; then
   # Use a real-browser UA — Cloudflare/modsecurity in front of the
@@ -140,6 +148,7 @@ fi
 # left the takeover silently dead on a signage display (Beacon §13-C1).
 if { { [[ -n "$CLOUD_URL" ]] && [[ "$URL" == "$CLOUD_URL" ]]; } \
      || { [[ -n "$SIGNAGE_URL" ]] && [[ "$URL" == "$SIGNAGE_URL" ]]; } \
+     || { [[ -n "$VISITOR_URL" ]] && [[ "$URL" == "$VISITOR_URL" ]]; } \
      || [[ "${KIOSK_OUTPUT_ARM:-}" == "1" ]]; } \
    && [[ "$URL" != *"kiosk_cache=1"* ]]; then
   if [[ "$URL" == *\?* ]]; then

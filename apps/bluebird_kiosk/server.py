@@ -831,6 +831,67 @@ def create_app() -> FastAPI:
             headers=_cors_headers(request),
         )
 
+    # ── Visitor check-in proxy (VMS Phase 2b) ────────────────────────────────
+    # The cloud /{slug}/visitor-kiosk page POSTs a check-in here over loopback; we
+    # inject THIS kiosk's license bearer and forward to the cloud so the token never
+    # touches the page (same separation as the IncidentPoller). Invariants copied
+    # verbatim from incident_poller: the cloud endpoint is under /api/public/ and we
+    # set allow_redirects=False, because the dashed→canonical 308 host hop strips the
+    # Authorization header. CORS + Chrome Private-Network-Access via _cors_headers, or
+    # the HTTPS-page→loopback POST fails silently in the browser.
+    @app.options("/legacy-wall/api/visitor/checkin")
+    async def visitor_checkin_preflight(request: Request):
+        return JSONResponse({"ok": True}, headers=_cors_headers(request))
+
+    @app.post("/legacy-wall/api/visitor/checkin")
+    async def visitor_checkin_proxy(request: Request):
+        cors = _cors_headers(request)
+        token = config.read_license_token()
+        if not token:
+            return JSONResponse({"error": "not_enrolled"}, status_code=403, headers=cors)
+        cfg = config.read_config()
+        backend = (cfg.get("BLUEBIRD_BACKEND") or "").rstrip("/")
+        if not backend:
+            return JSONResponse(
+                {"error": "backend_not_configured"}, status_code=503, headers=cors
+            )
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        # Forward only the check-in fields; tenant_id is derived cloud-side from the
+        # bearer (never the body), and the cloud caps the field lengths.
+        payload = {
+            "visitor_name": body.get("visitor_name") or "",
+            "visiting_whom": body.get("visiting_whom"),
+            "purpose": body.get("purpose"),
+        }
+        try:
+            resp = requests.post(
+                f"{backend}/api/public/kiosk/visitor/checkin",
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "User-Agent": f"BlueBirdKiosk/{__version__}",
+                },
+                timeout=15,
+                allow_redirects=False,
+            )
+        except requests.RequestException as exc:
+            return JSONResponse(
+                {"error": "network_error", "detail": str(exc)},
+                status_code=502,
+                headers=cors,
+            )
+        # Relay the cloud's JSON + status verbatim so the page shows the badge / errors.
+        try:
+            data = resp.json()
+        except ValueError:
+            data = {"error": "bad_upstream_response"}
+        return JSONResponse(data, status_code=resp.status_code, headers=cors)
+
     @app.post("/admin/kiosk/return-to-kiosk", dependencies=[Depends(require_admin)])
     async def admin_return_to_kiosk():
         """One-click recovery / dismissal action used by the admin overlay:
