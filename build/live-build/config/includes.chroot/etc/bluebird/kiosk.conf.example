@@ -23,3 +23,19 @@ ADMIN_PORT=7311
 
 # Heartbeat interval (seconds). Backend rate-limits to one per 30s.
 HEARTBEAT_INTERVAL_SEC=60
+
+# ── Content mode (what this kiosk renders) ───────────────────────────────────
+# DISPLAY_MODE selects the page the launcher loads:
+#   legacy_wall (default) → the Legacy Wall board (LEGACY_WALL_URL)
+#   signage               → a bound Beacon display (SIGNAGE_URL; set by heartbeat)
+#   visitor               → the visitor check-in page (VISITOR_URL) — VMS Phase 2b
+# DISPLAY_MODE=visitor turns this box into a front-desk visitor check-in kiosk.
+# VISITOR_URL is <BLUEBIRD_BACKEND>/<SCHOOL_SLUG>/visitor-kiosk (the visitor_management
+# add-on must be enabled for the tenant). The launcher arms it with ?kiosk_cache=1, so
+# the emergency takeover still fires AND the on-device check-in proxy
+# (127.0.0.1:7311/legacy-wall/api/visitor/checkin) authenticates the check-in with this
+# kiosk's license bearer. Example, for a dedicated visitor kiosk:
+#   DISPLAY_MODE=visitor
+#   VISITOR_URL=https://bluebird-alerts.com/nen/visitor-kiosk
+DISPLAY_MODE=legacy_wall
+VISITOR_URL=
