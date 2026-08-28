@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field
 from . import __version__, config
 from .services import display, nmcli_wrapper, pin, system
 from .services.incident_poller import IncidentPoller
+from .services.print_agent import PrintAgent
 from .services.local_cache import KioskLocalCache
 from .services.renderer import collect_slideshow_media, resolve_media_file_path
 
@@ -203,6 +204,10 @@ def create_app() -> FastAPI:
     # STARTED in main() — not in create_app() — so importing the module (and the
     # test suite) never spins up a network thread.
     app.state.incident_poller = IncidentPoller()
+    # Visitor badge print agent — pulls badge jobs + sends ZPL to the LAN printer. Gated OFF in
+    # config (PRINT_AGENT_ENABLED) so only a designated box prints; the thread idles cheaply
+    # otherwise. STARTED in main() like the incident poller, never at import/test time.
+    app.state.print_agent = PrintAgent()
     # Freshness heartbeat: updated on every page-driven request (kiosk viewer,
     # local fallback, or admin overlay). The watchdog reads its age via /_health
     # to detect a wedged display (e.g. stuck on a Cloudflare error page, which
@@ -1054,6 +1059,7 @@ def main() -> int:
 
     # Start the background cloud poll only now (real run) — never at import time.
     app.state.incident_poller.start()
+    app.state.print_agent.start()
     uvicorn.run(app, host=args.bind, port=args.port, log_level="info")
     return 0
 
