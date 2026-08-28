@@ -46,6 +46,10 @@ _DEFAULTS: Dict[str, str] = {
     # the emergency takeover still fires. Set in kiosk.conf for a dedicated visitor kiosk
     # (derive_visitor_url computes it from BLUEBIRD_BACKEND + SCHOOL_SLUG).
     "VISITOR_URL": "",
+    # Visitor badge print agent (VMS). When "1" (ONE designated box per school), the PrintAgent
+    # pulls pending badge jobs from the cloud and sends ZPL to the configured network printer.
+    # Default off so only the chosen kiosk on the LAN acts as the print bridge.
+    "PRINT_AGENT_ENABLED": "0",
 }
 
 
