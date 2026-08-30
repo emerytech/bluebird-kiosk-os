@@ -27,6 +27,11 @@ UBUNTU_ARCH="${UBUNTU_ARCH:-amd64}"
 SOURCE_ISO_NAME="ubuntu-${UBUNTU_VERSION}-live-server-${UBUNTU_ARCH}.iso"
 SOURCE_ISO_URL="https://releases.ubuntu.com/${UBUNTU_VERSION}/${SOURCE_ISO_NAME}"
 
+# OFFLINE=1 bakes a self-contained apt pool + the kiosk-os tree onto the ISO and
+# uses the offline autoinstall config, so the install needs NO network at all
+# (firstboot still handles WiFi). Requires docker for clean-room .deb gathering.
+OFFLINE="${OFFLINE:-0}"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CACHE_DIR="${BB_KIOSK_CACHE:-$HOME/.cache/bluebird-kiosk-os}"
@@ -34,7 +39,9 @@ WORK_DIR="$(mktemp -d -t bb-kiosk-iso.XXXXXX)"
 DIST_DIR="$SCRIPT_DIR/dist"
 
 SHORT_SHA="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-OUTPUT_ISO="$DIST_DIR/bluebird-kiosk-ubuntu-${UBUNTU_VERSION}-${SHORT_SHA}.iso"
+ISO_VARIANT=""
+[[ "$OFFLINE" == "1" ]] && ISO_VARIANT="-offline"
+OUTPUT_ISO="$DIST_DIR/bluebird-kiosk-ubuntu-${UBUNTU_VERSION}-${SHORT_SHA}${ISO_VARIANT}.iso"
 
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[warn]\033[0m %s\n' "$*" >&2; }
@@ -52,6 +59,10 @@ for cmd in xorriso wget sha256sum; do
   command -v "$cmd" >/dev/null 2>&1 || \
     die "missing required tool: $cmd  (apt install xorriso wget)"
 done
+if [[ "$OFFLINE" == "1" ]]; then
+  command -v docker >/dev/null 2>&1 || \
+    die "OFFLINE=1 needs docker (clean-room .deb gathering for the offline pool)"
+fi
 
 mkdir -p "$CACHE_DIR" "$DIST_DIR"
 
@@ -80,8 +91,61 @@ chmod -R u+w "$WORK_DIR/iso"
 # ── Step 3: inject autoinstall files ─────────────────────────────────────────
 log "embedding autoinstall user-data + meta-data"
 mkdir -p "$WORK_DIR/iso/nocloud"
-cp "$SCRIPT_DIR/autoinstall/user-data" "$WORK_DIR/iso/nocloud/user-data"
+if [[ "$OFFLINE" == "1" ]]; then
+  cp "$SCRIPT_DIR/autoinstall/user-data.offline" "$WORK_DIR/iso/nocloud/user-data"
+else
+  cp "$SCRIPT_DIR/autoinstall/user-data" "$WORK_DIR/iso/nocloud/user-data"
+fi
 cp "$SCRIPT_DIR/autoinstall/meta-data" "$WORK_DIR/iso/nocloud/meta-data"
+
+# ── Step 3b (OFFLINE): bake the kiosk-os tree + a self-contained apt pool ─────
+if [[ "$OFFLINE" == "1" ]]; then
+  BB_DIR="$WORK_DIR/iso/bluebird"
+  mkdir -p "$BB_DIR/kiosk-os" "$BB_DIR/pool"
+
+  log "OFFLINE: baking kiosk-os tree onto the ISO (/bluebird/kiosk-os)"
+  # install.sh runs from /root/kiosk-os/install/install.sh on the target, so its
+  # auto-detected KIOSK_OS=/root/kiosk-os. Exclude VCS + build artifacts.
+  ( cd "$REPO_ROOT" && tar --exclude='./.git' --exclude='./iso-builder/dist' \
+      --exclude='./build/dist' --exclude='./.cache' -cf - . ) \
+    | tar -C "$BB_DIR/kiosk-os" -xf -
+
+  log "OFFLINE: gathering the kiosk apt pool in a clean ubuntu:24.04 container"
+  # Full recursive dependency closure of the kiosk package set — a mirror of
+  # install.sh's APT_PACKAGES, but `chromium` (from the xtradeb PPA) instead of
+  # the chromium-browser snap shim, plus openssh-server. Gathered in a CLEAN
+  # container so the pool is self-sufficient on a fresh target with no network.
+  KIOSK_PKGS="sway swayidle swaylock seatd xwayland mesa-vulkan-drivers libgl1-mesa-dri \
+greetd chromium foot network-manager wpasupplicant iw dnsutils iputils-ping brightnessctl \
+wlr-randr grim libinput-tools python3-evdev python3 python3-pip python3-venv python3-fastapi \
+python3-uvicorn python3-jinja2 python3-pydantic python3-bcrypt python3-requests linux-firmware \
+polkitd plymouth plymouth-themes fonts-noto-color-emoji sudo systemd systemd-timesyncd \
+unattended-upgrades ca-certificates git rsync openssh-server"
+  docker run --rm --platform=linux/amd64 -v "$BB_DIR/pool:/pool" \
+    -e KIOSK_PKGS="$KIOSK_PKGS" ubuntu:24.04 bash -euc '
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update -qq
+      apt-get install -y --no-install-recommends software-properties-common dpkg-dev >/dev/null
+      add-apt-repository -y ppa:xtradeb/apps >/dev/null 2>&1
+      apt-get update -qq
+      # Recursive closure → real package names (drop indented Depends: lines and
+      # <virtual> entries apt-get download cannot fetch).
+      # Keep Depends + Pre-Depends (hard requirements); drop the rest. With
+      # --no-install-recommends at install time, Recommends are not needed here.
+      DEPS=$(apt-cache depends --recurse --no-recommends --no-suggests --no-conflicts \
+               --no-breaks --no-replaces --no-enhances $KIOSK_PKGS \
+             | grep "^[a-zA-Z0-9]" | sort -u)
+      cd /pool
+      n=0
+      for p in $DEPS; do
+        if apt-get download "$p" 2>/dev/null; then n=$((n+1)); else echo "  skip $p (virtual?)"; fi
+      done
+      dpkg-scanpackages -m . /dev/null 2>/dev/null | gzip -9c > Packages.gz
+      echo "  pool: $n debs, $(du -sh . | cut -f1)"
+    '
+  [[ -s "$BB_DIR/pool/Packages.gz" ]] || die "OFFLINE: pool gathering produced no Packages.gz"
+  log "OFFLINE: pool ready ($(du -sh "$BB_DIR/pool" | cut -f1)), tree + pool baked at /bluebird"
+fi
 
 # ── Step 4: patch GRUB config to autoinstall + auto-pick the first entry ─────
 # The Ubuntu Server 24.04 ISO uses /boot/grub/grub.cfg for both UEFI and BIOS
@@ -170,12 +234,17 @@ xorriso -as mkisofs -r \
 if [[ ! -s "$OUTPUT_ISO" ]] || ! file "$OUTPUT_ISO" 2>/dev/null | grep -q "boot sector"; then
   log "  primary mkisofs path didn't produce a hybrid bootable image — falling back to template mode"
   rm -f "$OUTPUT_ISO"
+  # OFFLINE: also graft the baked /bluebird tree (kiosk-os + apt pool) onto the
+  # template image so it lands on the installer media at /cdrom/bluebird.
+  OFFLINE_MAP=()
+  [[ "$OFFLINE" == "1" ]] && OFFLINE_MAP=(-map "$WORK_DIR/iso/bluebird" /bluebird)
   xorriso -indev "$SOURCE_ISO" \
     -outdev "$OUTPUT_ISO" \
     -boot_image any replay \
     -volid "BlueBird Kiosk OS $UBUNTU_VERSION" \
     -map "$WORK_DIR/iso/nocloud" /nocloud \
     -map "$WORK_DIR/iso/boot/grub/grub.cfg" /boot/grub/grub.cfg \
+    "${OFFLINE_MAP[@]}" \
     -commit 2>&1 | tail -5
 fi
 
