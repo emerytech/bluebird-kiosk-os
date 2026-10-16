@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+"""Decide whether take-screenshot should sit this tick out because the kiosk is in use.
+
+    screenshot-idle-check [--state-dir DIR] [--idle-secs N] [--max-defer-secs N]
+
+Exit 10 => skip this tick (one-line reason on stdout).
+Exit 0  => capture as usual.
+Any other exit (crash, bad args) is treated by take-screenshot as "capture":
+this helper can only ever make the fleet console a little staler, never blind.
+
+Why: grim + PNG encode is the biggest periodic CPU burst on a kiosk, and running it
+while a visitor is mid-tap is exactly what they feel as the touch UI "glitching"
+(NEN lobby, 2026-10-16). So we wait for a quiet moment instead.
+
+Inputs, all under --state-dir (default /var/lib/bluebird-kiosk):
+  last_input.json         {"last_input": <epoch secs>} — written by the gesture daemon
+                          on every finger-down (debounced). Missing/malformed => no
+                          touchscreen, or an older daemon => capture as before.
+  screenshot_last_upload  mtime = last successful upload (touched by take-screenshot).
+                          Bounds how long a continuously-used board can defer: once it
+                          is older than --max-defer-secs we capture regardless of touch,
+                          so the fleet console always gets a frame eventually. Created
+                          here on first sight so that budget is counted from the first
+                          observation instead of forcing a capture mid-touch.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import time
+from pathlib import Path
+
+DEFAULT_STATE_DIR = "/var/lib/bluebird-kiosk"
+LAST_INPUT_NAME = "last_input.json"
+UPLOAD_STAMP_NAME = "screenshot_last_upload"
+DEFAULT_IDLE_SECS = 30.0
+DEFAULT_MAX_DEFER_SECS = 600.0
+# A last_input stamp this far in the future means the clock stepped; don't trust it.
+FUTURE_TOLERANCE_SECS = 60.0
+
+EXIT_CAPTURE = 0
+EXIT_SKIP = 10
+
+
+def last_input_age(path: Path, now: float) -> "float | None":
+    """Seconds since the last touch, or None when unknown (missing/malformed stamp,
+    or a stamp from the future beyond clock-skew tolerance)."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        age = now - float(data.get("last_input"))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+    if age < -FUTURE_TOLERANCE_SECS:
+        return None
+    return max(age, 0.0)
+
+
+def upload_age(path: Path, now: float) -> float:
+    """Seconds since the last successful upload. A missing stamp is created now and
+    reported as 0 so the defer budget starts counting from this observation."""
+    try:
+        return max(now - path.stat().st_mtime, 0.0)
+    except OSError:
+        pass
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    except OSError:
+        pass
+    return 0.0
+
+
+def decide(input_age: "float | None", upload_age_secs: float,
+           idle_secs: float, max_defer_secs: float) -> "str | None":
+    """Pure decision: the reason to skip this tick, or None to capture.
+
+    Skip only when BOTH hold: the screen was touched within idle_secs, AND we have
+    uploaded a frame within max_defer_secs (so deferral is bounded)."""
+    if input_age is None or input_age >= idle_secs:
+        return None
+    if upload_age_secs >= max_defer_secs:
+        return None
+    return "touch input %ds ago (idle threshold %ds; last upload %ds ago)" % (
+        int(input_age), int(idle_secs), int(upload_age_secs),
+    )
+
+
+def main(argv: "list[str] | None" = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--state-dir", default=DEFAULT_STATE_DIR)
+    ap.add_argument("--idle-secs", type=float, default=DEFAULT_IDLE_SECS)
+    ap.add_argument("--max-defer-secs", type=float, default=DEFAULT_MAX_DEFER_SECS)
+    args = ap.parse_args(argv)
+    state = Path(args.state_dir)
+    now = time.time()
+
+    age = last_input_age(state / LAST_INPUT_NAME, now)
+    if age is None or age >= args.idle_secs:
+        return EXIT_CAPTURE  # no touch signal, or idle long enough — don't even touch the stamp
+    reason = decide(age, upload_age(state / UPLOAD_STAMP_NAME, now),
+                    args.idle_secs, args.max_defer_secs)
+    if reason is None:
+        return EXIT_CAPTURE
+    print(reason)
+    return EXIT_SKIP
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -46,6 +46,13 @@ SCHEDULE_PATH = Path("/var/lib/bluebird-kiosk/power_schedule.json")
 # the panel is scheduled-off) and by the heartbeat (report "scheduled off" to
 # the fleet console so it isn't mistaken for a wedged/black kiosk).
 STATE_PATH = Path("/var/lib/bluebird-kiosk/power_state.json")
+# Re-send the current dpms verb at least this often even when nothing changed. The
+# scheduler used to issue `swaymsg output * dpms on` EVERY minute while the panel was
+# already on — each one is a modeset-adjacent round trip through sway that showed up
+# as a periodic hitch on the NEN lobby touch board (field 2026-10-16). We now send
+# only on a change, with this slow re-assert as the fail-safe belt: if anything
+# outside the scheduler blanked the panel, it is never more than this far from ON.
+REASSERT_SECS = 15 * 60
 # Touch-to-wake override: the gesture daemon writes {"wake_until": <epoch secs>} here when the
 # screen is tapped during scheduled-off hours. While that timestamp is in the future the
 # scheduler forces the panel ON — a temporary reprieve before it returns to sleep. Fail-safe
@@ -55,10 +62,13 @@ CONF_PATH = Path("/etc/bluebird/kiosk.conf")
 KIOSK_USER = "bluebird-kiosk"
 
 
-def _write_state(display_on: bool, reason: str) -> None:
+def _write_state(display_on: bool, reason: str, applied: "dict | None" = None) -> None:
     """Persist the last decision. scheduled_off is true only when the schedule
     blanked the panel — an incident override (display_on while off-hours) is
-    NOT scheduled_off, so its screen is still captured + the fleet shows it."""
+    NOT scheduled_off, so its screen is still captured + the fleet shows it.
+
+    `applied` is what _apply() actually pushed through sway ({dpms, sock, at}) or
+    {} when nothing was applied; the next run uses it to skip a redundant swaymsg."""
     try:
         STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
         tmp = STATE_PATH.with_suffix(".tmp")
@@ -66,10 +76,40 @@ def _write_state(display_on: bool, reason: str) -> None:
             "display_on": bool(display_on),
             "scheduled_off": bool(not display_on and reason == "schedule"),
             "reason": reason,
+            "applied": applied if isinstance(applied, dict) else {},
         }), encoding="utf-8")
         tmp.replace(STATE_PATH)
     except OSError as exc:
         logger.warning("could not write power state: %s", exc)
+
+
+def _read_state() -> dict:
+    """The previous run's persisted state, or {} (missing/malformed => nothing is
+    trusted, so the next _apply re-sends — the safe direction)."""
+    try:
+        data = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _last_applied() -> dict:
+    applied = _read_state().get("applied")
+    return applied if isinstance(applied, dict) else {}
+
+
+def _already_applied(prev: dict, dpms: str, sock: str, now: float) -> bool:
+    """True iff the previous run positively applied the SAME verb through the SAME live
+    sway socket less than REASSERT_SECS ago. Anything else (first run, verb changed, sway
+    restarted => new socket path, last call failed => empty record, stale/garbage
+    timestamp) means re-send."""
+    if prev.get("dpms") != dpms or prev.get("sock") != sock:
+        return False
+    try:
+        age = now - float(prev.get("at"))
+    except (TypeError, ValueError):
+        return False
+    return 0 <= age < REASSERT_SECS
 
 
 def _admin_port() -> int:
@@ -202,17 +242,26 @@ def _sway_socket(uid: int) -> "str | None":
     return max(pool, key=_mtime)
 
 
-def _apply(state_on: bool) -> None:
+def _apply(state_on: bool) -> dict:
+    """Bring the panel to `state_on` via swaymsg — but only when that differs from what
+    the previous run actually applied (see _already_applied). Returns the `applied`
+    record to persist: the previous one when the call was skipped as redundant, a fresh
+    {dpms, sock, at} on success, or {} when nothing was applied (no session, sudo or
+    swaymsg failure) so the NEXT run retries instead of trusting stale state."""
     try:
         uid = pwd.getpwnam(KIOSK_USER).pw_uid
     except KeyError:
         logger.warning("user %s not found; cannot toggle display", KIOSK_USER)
-        return
+        return {}
     sock = _sway_socket(uid)
     if not sock:
         logger.info("no sway socket for uid %d yet; session not up — skipping", uid)
-        return
+        return {}
     dpms = "on" if state_on else "off"
+    prev = _last_applied()
+    if _already_applied(prev, dpms, sock, time.time()):
+        logger.debug("display already dpms %s — not re-sent", dpms)
+        return prev
     cmd = [
         "sudo", "-n", "-u", KIOSK_USER,
         "env", "SWAYSOCK=%s" % sock, "XDG_RUNTIME_DIR=/run/user/%d" % uid,
@@ -222,14 +271,15 @@ def _apply(state_on: bool) -> None:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
     except (OSError, subprocess.TimeoutExpired) as exc:
         logger.warning("swaymsg dpms %s error: %s", dpms, exc)
-        return
+        return {}
     if proc.returncode != 0:
         logger.warning(
             "swaymsg dpms %s failed rc=%s: %s",
             dpms, proc.returncode, (proc.stdout + proc.stderr).strip()[:200],
         )
-    else:
-        logger.info("display dpms %s", dpms)
+        return {}
+    logger.info("display dpms %s", dpms)
+    return {"dpms": dpms, "sock": sock, "at": int(time.time())}
 
 
 def main() -> int:
@@ -238,8 +288,8 @@ def main() -> int:
     )
     if _emergency_active():
         logger.info("active incident detected — forcing display ON")
-        _apply(True)
-        _write_state(True, "incident")
+        applied = _apply(True)
+        _write_state(True, "incident", applied)
         return 0
     schedule = _read_schedule()
     desired = _desired_on(schedule)
@@ -247,12 +297,12 @@ def main() -> int:
     # only when the schedule wants the panel OFF, and only ever forces it ON (safe direction).
     if not desired and _wake_active():
         logger.info("touch-to-wake override active — forcing display ON")
-        _apply(True)
-        _write_state(True, "wake_override")
+        applied = _apply(True)
+        _write_state(True, "wake_override", applied)
         return 0
-    _apply(desired)
+    applied = _apply(desired)
     reason = "schedule" if (isinstance(schedule, dict) and schedule.get("enabled")) else "no_schedule"
-    _write_state(desired, reason)
+    _write_state(desired, reason, applied)
     return 0
 
 

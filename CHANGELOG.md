@@ -3,6 +3,20 @@
 Most recent first. These notes are shown in the admin overlay before you apply a
 kiosk update, so an operator can see what an update will install before confirming.
 
+## 2026-10-16
+- **Smoother touch on busy boards.** Three periodic background jobs on the kiosk were
+  each causing a small, regular stall of the touch UI (reported on a front-lobby
+  Legacy Wall): the fleet-console screenshot now captures at half resolution with a
+  fast PNG encode (a quarter of the pixels, a fraction of the CPU), and **waits for a
+  quiet moment** — it skips its tick while the screen was touched in the last 30s
+  (never deferring more than 10 minutes past the last fresh frame). The display power
+  scheduler now only tells the panel to turn on/off when that actually changes
+  (instead of re-sending "on" every minute; it still re-asserts every 15 minutes as a
+  safety net). Paired with a backend change that stops the kiosk's emergency poll from
+  overlapping itself. Tunable from kiosk.conf: `SCREENSHOT_SCALE` (0.5),
+  `SCREENSHOT_PNG_LEVEL` (1), `SCREENSHOT_IDLE_SECS` (30), `SCREENSHOT_MAX_DEFER_SECS`
+  (600). (No action needed; applies on update.)
+
 ## 2026-07-31
 - **The ✕ on the admin PIN screen now closes the panel.** Previously the close
   button did nothing until a PIN was entered, so an admin panel opened by

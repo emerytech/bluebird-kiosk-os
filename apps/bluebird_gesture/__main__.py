@@ -55,6 +55,13 @@ WAKE_PATH = Path("/var/lib/bluebird-kiosk/wake_override.json")
 WAKE_SECONDS = 30 * 60        # reprieve length (matches the scheduler's check window)
 WAKE_DEBOUNCE = 3.0           # don't re-write the override more than this often (drag-friendly)
 
+# Last-touch stamp: take-screenshot (via screenshot-idle-check) reads this to avoid running
+# grim — a CPU burst that visibly stalls the touch UI — while someone is actively using the
+# kiosk. Written on every finger-down, debounced so a drag doesn't spam writes. Purely
+# advisory: a missing or stale stamp means "capture as usual".
+LAST_INPUT_PATH = Path("/var/lib/bluebird-kiosk/last_input.json")
+INPUT_STAMP_DEBOUNCE = 2.0
+
 logger = logging.getLogger("bluebird-gesture")
 
 
@@ -92,6 +99,23 @@ def _wake_on_touch() -> None:
         except (OSError, subprocess.TimeoutExpired) as exc:
             logger.warning("could not trigger power scheduler: %s", exc)
         logger.info("touch-to-wake: armed %ds + triggered wake", WAKE_SECONDS)
+
+
+def _note_input(now_wall: "float | None" = None) -> None:
+    """Record that the touchscreen was just used (wall-clock epoch, since the reader is a
+    separate process). Atomic tmp+rename like the wake override. Best-effort: a failed write
+    only means one skipped-screenshot opportunity is missed."""
+    try:
+        LAST_INPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = LAST_INPUT_PATH.with_suffix(".tmp")
+        tmp.write_text(
+            json.dumps({"last_input": float(now_wall if now_wall is not None else time.time()),
+                        "source": "touch"}),
+            encoding="utf-8",
+        )
+        tmp.replace(LAST_INPUT_PATH)
+    except OSError as exc:
+        logger.warning("could not write last-input stamp: %s", exc)
 
 
 def _sway_socket() -> "str | None":
@@ -178,6 +202,7 @@ def watch(devices: list) -> None:
     held_since: float | None = None
     last_trigger = 0.0
     last_wake = 0.0
+    last_stamp = 0.0
     corner_taps: List[float] = []
 
     while True:
@@ -219,6 +244,12 @@ def watch(devices: list) -> None:
         if touch_down and now - last_wake >= WAKE_DEBOUNCE:
             _wake_on_touch()
             last_wake = now
+
+        # Last-touch stamp for the screenshot idle skip (see LAST_INPUT_PATH). Debounced
+        # separately from touch-to-wake, which self-gates to off-hours and is longer.
+        if touch_down and now - last_stamp >= INPUT_STAMP_DEBOUNCE:
+            _note_input()
+            last_stamp = now
 
         # Corner-tap admin gesture: a tap that lifts in any corner counts; CORNER_TAPS of them
         # within CORNER_WINDOW opens admin. (Position is read at lift, when it's known.)

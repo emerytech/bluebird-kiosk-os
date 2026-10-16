@@ -147,7 +147,7 @@ def test_main_wake_override_forces_on_during_off_hours(tmp_path):
             mock.patch.object(ps, "_desired_on", return_value=False), \
             mock.patch.object(ps, "_apply", side_effect=lambda on: applied.__setitem__("on", on)), \
             mock.patch.object(ps, "_write_state",
-                              side_effect=lambda on, reason: state.update({"on": on, "reason": reason})):
+                              side_effect=lambda on, reason, applied=None: state.update({"on": on, "reason": reason})):
         rc = ps.main()
     assert rc == 0 and applied["on"] is True
     assert state == {"on": True, "reason": "wake_override"}
@@ -174,7 +174,7 @@ def test_main_emergency_beats_everything(tmp_path):
             mock.patch.object(ps, "_emergency_active", return_value=True), \
             mock.patch.object(ps, "_apply", return_value=None), \
             mock.patch.object(ps, "_write_state",
-                              side_effect=lambda on, reason: state.update({"on": on, "reason": reason})):
+                              side_effect=lambda on, reason, applied=None: state.update({"on": on, "reason": reason})):
         ps.main()
     assert state == {"on": True, "reason": "incident"}
 
@@ -214,3 +214,193 @@ def test_sway_socket_falls_back_to_newest_mtime_when_none_live(tmp_path):
     with mock.patch.object(ps.glob, "glob", return_value=[str(older), str(newer)]), \
             mock.patch.object(ps, "_pid_is_sway", return_value=False):
         assert ps._sway_socket(999) == str(newer)   # newest mtime wins as a safe fallback
+
+
+# ── _apply: send dpms only when the desired state differs from the last applied ───
+#
+# Field 2026-10-16 (NEN lobby touch board): `swaymsg output * dpms on` was re-sent
+# EVERY minute while the panel was already on. Each one is a round trip through
+# sway that showed as a periodic hitch in the touch UI. The scheduler now records
+# what it actually applied ({dpms, sock, at} under "applied" in power_state.json)
+# and skips a redundant call — but only when the previous run positively applied
+# the SAME verb through the SAME live sway socket within REASSERT_SECS. Anything
+# else re-sends: that is the fail-safe direction for a display that must be ON.
+
+SOCK = "/run/user/999/sway-ipc.999.2507.sock"
+
+
+def _sway_up(sock=SOCK):
+    fake = mock.Mock()
+    fake.pw_uid = 999
+    return (mock.patch.object(ps.pwd, "getpwnam", return_value=fake),
+            mock.patch.object(ps, "_sway_socket", return_value=sock))
+
+
+def _ok():
+    return mock.Mock(returncode=0, stdout="", stderr="")
+
+
+def _dpms_verbs(run_mock):
+    return [c.args[0][-1] for c in run_mock.call_args_list]
+
+
+def test_apply_sends_when_nothing_was_applied_before():
+    pw, sw = _sway_up()
+    with pw, sw, mock.patch.object(ps, "_last_applied", return_value={}), \
+            mock.patch.object(ps.subprocess, "run", return_value=_ok()) as run:
+        rec = ps._apply(True)
+    assert _dpms_verbs(run) == ["on"]
+    assert rec["dpms"] == "on" and rec["sock"] == SOCK
+    assert abs(rec["at"] - time.time()) < 5
+
+
+def test_apply_skips_redundant_call_and_keeps_previous_record():
+    prev = {"dpms": "on", "sock": SOCK, "at": int(time.time()) - 60}
+    pw, sw = _sway_up()
+    with pw, sw, mock.patch.object(ps, "_last_applied", return_value=prev), \
+            mock.patch.object(ps.subprocess, "run", return_value=_ok()) as run:
+        rec = ps._apply(True)
+    assert run.call_count == 0
+    assert rec == prev
+
+
+def test_apply_resends_when_the_verb_changes():
+    prev = {"dpms": "on", "sock": SOCK, "at": int(time.time()) - 60}
+    pw, sw = _sway_up()
+    with pw, sw, mock.patch.object(ps, "_last_applied", return_value=prev), \
+            mock.patch.object(ps.subprocess, "run", return_value=_ok()) as run:
+        rec = ps._apply(False)
+    assert _dpms_verbs(run) == ["off"] and rec["dpms"] == "off"
+
+
+def test_apply_resends_after_sway_restart_new_socket():
+    prev = {"dpms": "on", "sock": "/run/user/999/sway-ipc.999.1465.sock", "at": int(time.time()) - 60}
+    pw, sw = _sway_up()
+    with pw, sw, mock.patch.object(ps, "_last_applied", return_value=prev), \
+            mock.patch.object(ps.subprocess, "run", return_value=_ok()) as run:
+        ps._apply(True)
+    assert _dpms_verbs(run) == ["on"]
+
+
+def test_apply_reasserts_after_the_slow_window():
+    prev = {"dpms": "on", "sock": SOCK, "at": int(time.time()) - ps.REASSERT_SECS - 1}
+    pw, sw = _sway_up()
+    with pw, sw, mock.patch.object(ps, "_last_applied", return_value=prev), \
+            mock.patch.object(ps.subprocess, "run", return_value=_ok()) as run:
+        ps._apply(True)
+    assert _dpms_verbs(run) == ["on"]
+
+
+def test_apply_resends_on_garbage_or_future_timestamp():
+    pw, sw = _sway_up()
+    for at in ("bogus", None, time.time() + 3600):
+        prev = {"dpms": "on", "sock": SOCK, "at": at}
+        with pw, sw, mock.patch.object(ps, "_last_applied", return_value=prev), \
+                mock.patch.object(ps.subprocess, "run", return_value=_ok()) as run:
+            ps._apply(True)
+        assert _dpms_verbs(run) == ["on"], at
+
+
+def test_apply_failed_call_returns_empty_so_the_next_run_retries():
+    pw, sw = _sway_up()
+    with pw, sw, mock.patch.object(ps, "_last_applied", return_value={}), \
+            mock.patch.object(ps.subprocess, "run",
+                              return_value=mock.Mock(returncode=1, stdout="", stderr="Unable to connect")):
+        assert ps._apply(True) == {}
+    with pw, sw, mock.patch.object(ps, "_last_applied", return_value={}), \
+            mock.patch.object(ps.subprocess, "run", side_effect=OSError("no sudo")):
+        assert ps._apply(True) == {}
+
+
+def test_apply_without_a_session_returns_empty_and_sends_nothing():
+    fake = mock.Mock()
+    fake.pw_uid = 999
+    with mock.patch.object(ps.pwd, "getpwnam", return_value=fake), \
+            mock.patch.object(ps, "_sway_socket", return_value=None), \
+            mock.patch.object(ps.subprocess, "run") as run:
+        assert ps._apply(True) == {}
+    assert run.call_count == 0
+
+
+# ── state file: applied record round-trips; existing fields unchanged ─────────
+
+def test_write_state_persists_applied_and_keeps_scheduled_off_contract(tmp_path):
+    f = tmp_path / "power_state.json"
+    rec = {"dpms": "on", "sock": SOCK, "at": 1234}
+    with mock.patch.object(ps, "STATE_PATH", f):
+        ps._write_state(True, "schedule", rec)
+        data = json.loads(f.read_text(encoding="utf-8"))
+        assert data["display_on"] is True and data["scheduled_off"] is False
+        assert data["applied"] == rec
+        assert ps._last_applied() == rec
+        ps._write_state(False, "schedule", {})
+        data = json.loads(f.read_text(encoding="utf-8"))
+        assert data["scheduled_off"] is True and data["applied"] == {}
+        ps._write_state(True, "incident")                     # old 2-arg call still works
+        assert json.loads(f.read_text(encoding="utf-8"))["applied"] == {}
+
+
+def test_read_state_missing_or_malformed_is_empty(tmp_path):
+    f = tmp_path / "power_state.json"
+    with mock.patch.object(ps, "STATE_PATH", f):
+        assert ps._read_state() == {} and ps._last_applied() == {}
+        f.write_text("garbage", encoding="utf-8")
+        assert ps._read_state() == {} and ps._last_applied() == {}
+        f.write_text(json.dumps({"applied": "not-a-dict"}), encoding="utf-8")
+        assert ps._last_applied() == {}
+
+
+def test_main_threads_the_applied_record_into_state():
+    rec = {"dpms": "on", "sock": SOCK, "at": 1}
+    seen = {}
+    with mock.patch.object(ps, "_emergency_active", return_value=False), \
+            mock.patch.object(ps, "_read_schedule", return_value={}), \
+            mock.patch.object(ps, "_apply", return_value=rec), \
+            mock.patch.object(ps, "_write_state",
+                              side_effect=lambda on, reason, applied=None: seen.update(
+                                  {"on": on, "reason": reason, "applied": applied})):
+        ps.main()
+    assert seen == {"on": True, "reason": "no_schedule", "applied": rec}
+
+
+# ── minute-by-minute: one swaymsg per transition, quiet in between ────────────
+
+def test_minute_loop_sends_once_then_stays_quiet(tmp_path):
+    f = tmp_path / "power_state.json"
+    pw, sw = _sway_up()
+    with pw, sw, mock.patch.object(ps, "STATE_PATH", f), \
+            mock.patch.object(ps, "_emergency_active", return_value=False), \
+            mock.patch.object(ps, "_read_schedule", return_value={}), \
+            mock.patch.object(ps.subprocess, "run", return_value=_ok()) as run:
+        for _ in range(5):
+            assert ps.main() == 0
+    assert _dpms_verbs(run) == ["on"]                 # was 5x "on" before the change
+
+
+def test_minute_loop_resends_on_each_transition_only(tmp_path):
+    f = tmp_path / "power_state.json"
+    wake = tmp_path / "wake.json"
+    pw, sw = _sway_up()
+    with pw, sw, mock.patch.object(ps, "STATE_PATH", f), mock.patch.object(ps, "WAKE_PATH", wake), \
+            mock.patch.object(ps, "_emergency_active", return_value=False), \
+            mock.patch.object(ps, "_read_schedule", return_value={"enabled": True}), \
+            mock.patch.object(ps, "_desired_on", return_value=False), \
+            mock.patch.object(ps.subprocess, "run", return_value=_ok()) as run:
+        ps.main(); ps.main()                                     # off-hours: blank once
+        _write_wake(wake, time.time() + 300)                     # tap: wake override
+        ps.main(); ps.main()                                     # on once, then quiet
+        _write_wake(wake, time.time() - 1)                       # override expired
+        ps.main(); ps.main()                                     # back off once, then quiet
+    assert _dpms_verbs(run) == ["off", "on", "off"]
+
+
+def test_minute_loop_retries_after_a_failed_call(tmp_path):
+    f = tmp_path / "power_state.json"
+    pw, sw = _sway_up()
+    with pw, sw, mock.patch.object(ps, "STATE_PATH", f), \
+            mock.patch.object(ps, "_emergency_active", return_value=False), \
+            mock.patch.object(ps, "_read_schedule", return_value={}), \
+            mock.patch.object(ps.subprocess, "run",
+                              side_effect=[mock.Mock(returncode=1, stdout="", stderr="x"), _ok(), _ok()]) as run:
+        ps.main(); ps.main(); ps.main()
+    assert run.call_count == 2                        # failed, retried OK, then quiet
