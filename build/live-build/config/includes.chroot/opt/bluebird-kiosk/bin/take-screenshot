@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # Capture the kiosk's current sway display + POST it to the backend
-# fleet console. Fired every ~60s by bluebird-screenshot.timer.
+# fleet console. Fired every ~120s by bluebird-screenshot.timer.
+#
+# Cheap by design (field 2026-10-16, NEN lobby i5-8265U): the capture is
+# downscaled (grim -s 0.5) and encoded at the fastest PNG level, and the
+# whole tick is skipped while someone is actively touching the screen —
+# a full-res capture (~1.5s CPU, 3-4MB PNG) landing mid-tap is what
+# visitors felt as the touch UI "glitching". See screenshot-idle-check.
 #
 # Auth: uses the license token from /etc/bluebird/license.token (same
 # bearer the sync service uses). If absent, exits 0 — the fleet
@@ -13,12 +19,30 @@
 # journaled at WARNING for diagnosis.
 set -u
 
-CONF=/etc/bluebird/kiosk.conf
-TOKEN_FILE=/etc/bluebird/license.token
+# Paths are env-overridable ONLY so the test suite can drive the skip paths
+# against a temp tree; production never sets these.
+CONF="${BLUEBIRD_KIOSK_CONF:-/etc/bluebird/kiosk.conf}"
+TOKEN_FILE="${BLUEBIRD_LICENSE_TOKEN_FILE:-/etc/bluebird/license.token}"
+STATE_DIR="${BLUEBIRD_STATE_DIR:-/var/lib/bluebird-kiosk}"
 LOG_TAG=bluebird-screenshot
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 log_warn() { logger -t "$LOG_TAG" -p user.warning "$1"; }
 log_info() { logger -t "$LOG_TAG" -p user.info    "$1"; }
+
+# ── Operator request ("Screenshot now" in the fleet console) ─────────────────
+# heartbeat stages $STATE_DIR/screenshot.request and then starts this unit. The
+# operator usually asks precisely because someone is standing at the board, so
+# that frame must NOT be deferred by the touch-idle gate below. Consumed here,
+# before any early exit, so a stale request can never force a later periodic
+# tick. (If the request lands while a periodic run is already past this point,
+# `systemctl start` joins that run; the file then survives to the next tick,
+# which honours it — the operator gets a fresh frame within ~2 min either way.)
+FORCE_CAPTURE=0
+if [[ -e "$STATE_DIR/screenshot.request" ]]; then
+  rm -f "$STATE_DIR/screenshot.request"
+  FORCE_CAPTURE=1
+fi
 
 # ── Preflight ────────────────────────────────────────────────────────────────
 [[ -r "$CONF" ]]       || { log_warn "missing $CONF — kiosk not configured"; exit 0; }
@@ -30,15 +54,52 @@ BACKEND="${BLUEBIRD_BACKEND:-}"
 TOKEN="$(tr -d '[:space:]' < "$TOKEN_FILE")"
 [[ -n "$TOKEN" ]]      || { log_warn "license.token is empty"; exit 0; }
 
+# ── Capture tunables (overridable from kiosk.conf) ───────────────────────────
+# SCREENSHOT_SCALE: grim -s factor. 0.5 = a quarter of the pixels to encode. The
+#   fleet console thumbnails at 480px wide, so a 960x540 frame from a 1080p
+#   panel loses nothing there. Full-res 1080p PNGs were 3.3-4.3MB and ~1.5s of
+#   CPU per tick on the i5-8265U lobby box — a visible stall of the touch UI.
+# SCREENSHOT_PNG_LEVEL: grim -l (zlib 0-9; grim's default is 6). 1 = fastest
+#   encode; the file is somewhat larger but still far under the backend's 5MB cap.
+# SCREENSHOT_IDLE_SECS: skip the tick if the touchscreen was used this recently.
+# SCREENSHOT_MAX_DEFER_SECS: ...but never defer longer than this past the last
+#   successful upload, so a busy lobby board still gets a fresh frame.
+SCREENSHOT_SCALE="${SCREENSHOT_SCALE:-0.5}"
+SCREENSHOT_PNG_LEVEL="${SCREENSHOT_PNG_LEVEL:-1}"
+SCREENSHOT_IDLE_SECS="${SCREENSHOT_IDLE_SECS:-30}"
+SCREENSHOT_MAX_DEFER_SECS="${SCREENSHOT_MAX_DEFER_SECS:-600}"
+
 # ── Skip while the panel is scheduled-off ────────────────────────────────────
 # Uploading a black DPMS-off frame would make the fleet console look like the
 # kiosk is wedged. The power scheduler records its last decision here; an
 # incident override keeps the display on (scheduled_off=false) so its screen
 # IS still captured.
-STATE_FILE=/var/lib/bluebird-kiosk/power_state.json
+STATE_FILE="$STATE_DIR/power_state.json"
 if [[ -r "$STATE_FILE" ]] && /usr/bin/python3 -c "import json,sys; sys.exit(0 if json.load(open('$STATE_FILE')).get('scheduled_off') else 1)" 2>/dev/null; then
   log_info "display scheduled off — skipping screenshot"
   exit 0
+fi
+
+# ── Skip while someone is using the touchscreen ──────────────────────────────
+# Even downscaled, grim + PNG encode is the biggest periodic CPU burst on the
+# box, and doing it mid-tap is exactly what a visitor feels as a "glitch". The
+# gesture daemon stamps the last touch in $STATE_DIR/last_input.json; the helper
+# answers "skip" (exit 10) when that is within SCREENSHOT_IDLE_SECS and we have
+# uploaded within SCREENSHOT_MAX_DEFER_SECS. Fail-open: helper missing, stamp
+# missing (no touchscreen / older gesture daemon) or any other exit => capture.
+# An operator request (FORCE_CAPTURE, above) bypasses the gate entirely.
+IDLE_CHECK="$SCRIPT_DIR/screenshot-idle-check"
+if [[ "$FORCE_CAPTURE" -eq 1 ]]; then
+  log_info "on-demand capture — idle gate bypassed"
+elif [[ -x "$IDLE_CHECK" ]]; then
+  SKIP_REASON="$("$IDLE_CHECK" --state-dir "$STATE_DIR" \
+                   --idle-secs "$SCREENSHOT_IDLE_SECS" \
+                   --max-defer-secs "$SCREENSHOT_MAX_DEFER_SECS" 2>/dev/null)"
+  rc=$?
+  if [[ "$rc" -eq 10 ]]; then
+    log_info "skipping screenshot: ${SKIP_REASON:-recent touch input}"
+    exit 0
+  fi
 fi
 
 # ── Find the running sway session ────────────────────────────────────────────
@@ -46,7 +107,7 @@ fi
 # Same pattern services/display.py uses for wlr-randr — sway runs under
 # the bluebird-kiosk user (uid varies across installs), so we probe.
 UID_RUNTIME="$(id -u bluebird-kiosk 2>/dev/null || echo 999)"
-RUNTIME_DIR="/run/user/${UID_RUNTIME}"
+RUNTIME_DIR="${BLUEBIRD_RUNTIME_DIR:-/run/user/${UID_RUNTIME}}"
 WAYLAND_SOCK=""
 if [[ -d "$RUNTIME_DIR" ]]; then
   # Pick the first wayland-* socket that isn't a lockfile.
@@ -65,7 +126,7 @@ TMP_PNG="$(mktemp --suffix=.png)"
 trap 'rm -f "$TMP_PNG"' EXIT
 
 # Run grim as the bluebird-kiosk user so it can talk to sway's wayland
-# socket. `grim -t png -` writes the PNG to stdout — the parent shell
+# socket. `grim ... -t png -` writes the PNG to stdout — the parent shell
 # (root) then redirects it into the temp file. Doing it this way avoids
 # the bluebird-kiosk user trying to write into a root-owned mktemp file
 # (which fails with EACCES — field-confirmed 2026-06-09 first run).
@@ -75,10 +136,13 @@ trap 'rm -f "$TMP_PNG"' EXIT
 # in `activating` for 1h53m, and every fleet-console "Screenshot now" after that queued
 # behind it. The backend gives up at 60s; the box never did. 25s is well clear of a
 # healthy multi-output capture while guaranteeing the timer's next fire finds us gone.
-if ! timeout -k 5 25 sudo -n -u bluebird-kiosk \
+# NB: the status is captured directly, not inside an `if ! <cmd>; then rc=$?` block —
+# there $? is the negated test (always 0) and the 124/137 timeout branch never fired.
+timeout -k 5 25 sudo -n -u bluebird-kiosk \
        env XDG_RUNTIME_DIR="$RUNTIME_DIR" WAYLAND_DISPLAY="$WAYLAND_SOCK" \
-       grim -t png - > "$TMP_PNG" 2>/dev/null; then
-  rc=$?
+       grim -s "$SCREENSHOT_SCALE" -l "$SCREENSHOT_PNG_LEVEL" -t png - > "$TMP_PNG" 2>/dev/null
+rc=$?
+if [[ "$rc" -ne 0 ]]; then
   if [[ "$rc" -eq 124 || "$rc" -eq 137 ]]; then
     log_warn "grim timed out after 25s — an output is likely not scanning out (sway socket=$RUNTIME_DIR/$WAYLAND_SOCK)"
   else
@@ -111,6 +175,8 @@ HTTP_CODE=$(curl -sS -X POST \
 
 if [[ "$HTTP_CODE" == "200" ]]; then
   log_info "uploaded ${SIZE} bytes → HTTP 200"
+  # Defer-budget clock for the idle skip above (mtime = last fresh frame).
+  { mkdir -p "$STATE_DIR" && touch "$STATE_DIR/screenshot_last_upload"; } 2>/dev/null || true
 else
   log_warn "upload failed HTTP $HTTP_CODE (size=${SIZE})"
 fi

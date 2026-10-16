@@ -55,3 +55,41 @@ def test_sway_socket_picks_kiosk_uid_socket(tmp_path):
             mock.patch.object(g.glob, "glob", return_value=[sock]) as gl:
         assert g._sway_socket() == sock
         assert "4242" in gl.call_args[0][0]         # globbed the kiosk uid, not root's
+
+
+# ── last-touch stamp (read by screenshot-idle-check to skip grim mid-interaction) ──
+
+import json   # noqa: E402
+import time   # noqa: E402
+
+
+def test_note_input_writes_epoch_stamp_atomically(tmp_path):
+    f = tmp_path / "last_input.json"
+    with mock.patch.object(g, "LAST_INPUT_PATH", f):
+        g._note_input(1234.5)
+    data = json.loads(f.read_text(encoding="utf-8"))
+    assert data == {"last_input": 1234.5, "source": "touch"}
+    assert not (tmp_path / "last_input.tmp").exists()      # tmp+rename, nothing left behind
+
+
+def test_note_input_defaults_to_wall_clock_now(tmp_path):
+    f = tmp_path / "last_input.json"
+    before = time.time()
+    with mock.patch.object(g, "LAST_INPUT_PATH", f):
+        g._note_input()
+    stamp = json.loads(f.read_text(encoding="utf-8"))["last_input"]
+    assert before <= stamp <= time.time()                   # epoch secs, not monotonic
+
+
+def test_note_input_unwritable_path_is_logged_not_raised(tmp_path):
+    blocker = tmp_path / "not-a-dir"
+    blocker.write_text("", encoding="utf-8")
+    with mock.patch.object(g, "LAST_INPUT_PATH", blocker / "last_input.json"):
+        g._note_input()                                       # must not raise: advisory only
+
+
+def test_input_stamp_debounce_is_short_and_independent_of_wake():
+    # A drag shouldn't spam writes, but a 30s idle window needs a stamp fresher than
+    # the touch-to-wake debounce would give.
+    assert 0 < g.INPUT_STAMP_DEBOUNCE <= 5
+    assert g.INPUT_STAMP_DEBOUNCE <= g.WAKE_DEBOUNCE

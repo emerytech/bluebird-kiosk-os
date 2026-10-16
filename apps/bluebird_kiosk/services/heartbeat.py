@@ -304,7 +304,19 @@ def _run_systemctl(argv: List[str], timeout_s: int = 30) -> Tuple[bool, str]:
     return True, out[:500] or "ok"
 
 
+_SCREENSHOT_REQUEST = Path("/var/lib/bluebird-kiosk/screenshot.request")
+
+
 def _cmd_take_screenshot() -> Tuple[bool, str]:
+    # take-screenshot skips its periodic tick while someone is touching the board
+    # (see screenshot-idle-check). An operator asking for THIS frame usually does so
+    # precisely because someone is at the board, so stage a request the script
+    # consumes to bypass that gate. Best-effort: if the file cannot be written the
+    # capture still runs, just subject to the gate as before.
+    try:
+        _SCREENSHOT_REQUEST.write_text("", encoding="utf-8")
+    except OSError as exc:
+        logger.warning("take_screenshot: could not stage %s: %s", _SCREENSHOT_REQUEST, exc)
     return _run_systemctl(["start", "bluebird-screenshot.service"], timeout_s=60)
 
 
