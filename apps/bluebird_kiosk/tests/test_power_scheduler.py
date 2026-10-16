@@ -13,6 +13,8 @@ from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
 _HERE = Path(__file__).resolve()
 _ROOT = next(
     p for p in _HERE.parents if (p / "build").is_dir() and (p / "apps").is_dir()
@@ -34,6 +36,15 @@ def _load():
 
 
 ps = _load()
+_REAL_BOOT_ID = ps._boot_id          # the unpatched function, for its own test below
+
+
+@pytest.fixture(autouse=True)
+def _pinned_boot_id():
+    # The applied record is keyed on the boot id (see _boot_id). Pin it so the tests
+    # are deterministic on hosts without /proc (macOS) and a reboot can be simulated.
+    with mock.patch.object(ps, "_boot_id", return_value="boot-A"):
+        yield
 
 
 def _at(dt, schedule):
@@ -252,10 +263,11 @@ def test_apply_sends_when_nothing_was_applied_before():
     assert _dpms_verbs(run) == ["on"]
     assert rec["dpms"] == "on" and rec["sock"] == SOCK
     assert abs(rec["at"] - time.time()) < 5
+    assert rec["boot"] == "boot-A"
 
 
 def test_apply_skips_redundant_call_and_keeps_previous_record():
-    prev = {"dpms": "on", "sock": SOCK, "at": int(time.time()) - 60}
+    prev = {"dpms": "on", "sock": SOCK, "at": int(time.time()) - 60, "boot": "boot-A"}
     pw, sw = _sway_up()
     with pw, sw, mock.patch.object(ps, "_last_applied", return_value=prev), \
             mock.patch.object(ps.subprocess, "run", return_value=_ok()) as run:
@@ -289,6 +301,43 @@ def test_apply_reasserts_after_the_slow_window():
             mock.patch.object(ps.subprocess, "run", return_value=_ok()) as run:
         ps._apply(True)
     assert _dpms_verbs(run) == ["on"]
+
+
+def test_apply_resends_after_a_reboot_even_if_the_socket_path_repeats():
+    # sway's socket path embeds its pid, and a deterministic boot can hand out the same
+    # pid again. Across a reboot the panel is back in its default-ON state, so a persisted
+    # "off applied" record must not suppress the first scheduled-off call of the new boot.
+    prev = {"dpms": "off", "sock": SOCK, "at": int(time.time()) - 60, "boot": "boot-A"}
+    pw, sw = _sway_up()
+    with pw, sw, mock.patch.object(ps, "_boot_id", return_value="boot-B"), \
+            mock.patch.object(ps, "_last_applied", return_value=prev), \
+            mock.patch.object(ps.subprocess, "run", return_value=_ok()) as run:
+        rec = ps._apply(False)
+    assert _dpms_verbs(run) == ["off"] and rec["boot"] == "boot-B"
+
+
+def test_apply_resends_when_the_boot_id_is_missing_from_the_record_or_unreadable():
+    pw, sw = _sway_up()
+    prev = {"dpms": "on", "sock": SOCK, "at": int(time.time()) - 60}       # pre-boot-id record
+    with pw, sw, mock.patch.object(ps, "_last_applied", return_value=prev), \
+            mock.patch.object(ps.subprocess, "run", return_value=_ok()) as run:
+        ps._apply(True)
+    assert _dpms_verbs(run) == ["on"]
+    prev["boot"] = ""
+    with pw, sw, mock.patch.object(ps, "_boot_id", return_value=""), \
+            mock.patch.object(ps, "_last_applied", return_value=prev), \
+            mock.patch.object(ps.subprocess, "run", return_value=_ok()) as run:
+        ps._apply(True)
+    assert _dpms_verbs(run) == ["on"]                                        # unreadable => never trust
+
+
+def test_boot_id_reads_proc_and_is_empty_when_unreadable(tmp_path):
+    f = tmp_path / "boot_id"
+    f.write_text("0b6d1b7a-5f1e-4c53-9d7a-2b1c3d4e5f60\n", encoding="utf-8")
+    with mock.patch.object(ps, "BOOT_ID_PATH", f):
+        assert _REAL_BOOT_ID() == "0b6d1b7a-5f1e-4c53-9d7a-2b1c3d4e5f60"
+    with mock.patch.object(ps, "BOOT_ID_PATH", tmp_path / "missing"):
+        assert _REAL_BOOT_ID() == ""
 
 
 def test_apply_resends_on_garbage_or_future_timestamp():

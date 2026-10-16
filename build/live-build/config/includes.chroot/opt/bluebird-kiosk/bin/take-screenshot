@@ -30,6 +30,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 log_warn() { logger -t "$LOG_TAG" -p user.warning "$1"; }
 log_info() { logger -t "$LOG_TAG" -p user.info    "$1"; }
 
+# ── Operator request ("Screenshot now" in the fleet console) ─────────────────
+# heartbeat stages $STATE_DIR/screenshot.request and then starts this unit. The
+# operator usually asks precisely because someone is standing at the board, so
+# that frame must NOT be deferred by the touch-idle gate below. Consumed here,
+# before any early exit, so a stale request can never force a later periodic
+# tick. (If the request lands while a periodic run is already past this point,
+# `systemctl start` joins that run; the file then survives to the next tick,
+# which honours it — the operator gets a fresh frame within ~2 min either way.)
+FORCE_CAPTURE=0
+if [[ -e "$STATE_DIR/screenshot.request" ]]; then
+  rm -f "$STATE_DIR/screenshot.request"
+  FORCE_CAPTURE=1
+fi
+
 # ── Preflight ────────────────────────────────────────────────────────────────
 [[ -r "$CONF" ]]       || { log_warn "missing $CONF — kiosk not configured"; exit 0; }
 # shellcheck disable=SC1090
@@ -73,8 +87,11 @@ fi
 # answers "skip" (exit 10) when that is within SCREENSHOT_IDLE_SECS and we have
 # uploaded within SCREENSHOT_MAX_DEFER_SECS. Fail-open: helper missing, stamp
 # missing (no touchscreen / older gesture daemon) or any other exit => capture.
+# An operator request (FORCE_CAPTURE, above) bypasses the gate entirely.
 IDLE_CHECK="$SCRIPT_DIR/screenshot-idle-check"
-if [[ -x "$IDLE_CHECK" ]]; then
+if [[ "$FORCE_CAPTURE" -eq 1 ]]; then
+  log_info "on-demand capture — idle gate bypassed"
+elif [[ -x "$IDLE_CHECK" ]]; then
   SKIP_REASON="$("$IDLE_CHECK" --state-dir "$STATE_DIR" \
                    --idle-secs "$SCREENSHOT_IDLE_SECS" \
                    --max-defer-secs "$SCREENSHOT_MAX_DEFER_SECS" 2>/dev/null)"
@@ -119,10 +136,13 @@ trap 'rm -f "$TMP_PNG"' EXIT
 # in `activating` for 1h53m, and every fleet-console "Screenshot now" after that queued
 # behind it. The backend gives up at 60s; the box never did. 25s is well clear of a
 # healthy multi-output capture while guaranteeing the timer's next fire finds us gone.
-if ! timeout -k 5 25 sudo -n -u bluebird-kiosk \
+# NB: the status is captured directly, not inside an `if ! <cmd>; then rc=$?` block —
+# there $? is the negated test (always 0) and the 124/137 timeout branch never fired.
+timeout -k 5 25 sudo -n -u bluebird-kiosk \
        env XDG_RUNTIME_DIR="$RUNTIME_DIR" WAYLAND_DISPLAY="$WAYLAND_SOCK" \
-       grim -s "$SCREENSHOT_SCALE" -l "$SCREENSHOT_PNG_LEVEL" -t png - > "$TMP_PNG" 2>/dev/null; then
-  rc=$?
+       grim -s "$SCREENSHOT_SCALE" -l "$SCREENSHOT_PNG_LEVEL" -t png - > "$TMP_PNG" 2>/dev/null
+rc=$?
+if [[ "$rc" -ne 0 ]]; then
   if [[ "$rc" -eq 124 || "$rc" -eq 137 ]]; then
     log_warn "grim timed out after 25s — an output is likely not scanning out (sway socket=$RUNTIME_DIR/$WAYLAND_SOCK)"
   else

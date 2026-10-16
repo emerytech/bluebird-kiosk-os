@@ -128,12 +128,39 @@ def test_kiosk_conf_can_tune_the_idle_window(kiosk):
     assert rc == 0 and CAPTURE_PATH_MARK in log
 
 
+def test_operator_request_bypasses_the_idle_gate(kiosk):
+    # Fleet-console "Screenshot now": heartbeat stages screenshot.request, then starts
+    # the unit. The operator asks because someone is AT the board — never defer that.
+    kiosk.touch(5)
+    (kiosk.state / "screenshot.request").write_text("", encoding="utf-8")
+    rc, log = kiosk.run()
+    assert rc == 0 and CAPTURE_PATH_MARK in log
+    assert "idle gate bypassed" in log and "skipping screenshot" not in log
+    assert not (kiosk.state / "screenshot.request").exists()        # consumed, never sticky
+
+
+def test_stale_request_is_consumed_even_when_an_earlier_gate_exits(kiosk):
+    # A request that arrives while the panel is scheduled-off must not linger and force
+    # the NEXT periodic tick after the display comes back.
+    (kiosk.state / "power_state.json").write_text(
+        json.dumps({"display_on": False, "scheduled_off": True, "reason": "schedule"}),
+        encoding="utf-8")
+    (kiosk.state / "screenshot.request").write_text("", encoding="utf-8")
+    rc, log = kiosk.run()
+    assert rc == 0 and "display scheduled off" in log and CAPTURE_PATH_MARK not in log
+    assert not (kiosk.state / "screenshot.request").exists()
+
+
 def test_grim_is_invoked_downscaled_with_fast_png():
     src = _SCRIPT.read_text(encoding="utf-8")
     assert 'grim -s "$SCREENSHOT_SCALE" -l "$SCREENSHOT_PNG_LEVEL" -t png -' in src
     assert 'SCREENSHOT_SCALE="${SCREENSHOT_SCALE:-0.5}"' in src
     assert 'SCREENSHOT_PNG_LEVEL="${SCREENSHOT_PNG_LEVEL:-1}"' in src
     assert "-t jpeg" not in src          # backend accepts image/png only (415 otherwise)
+    # `rc=$?` inside `if ! cmd; then` is the negated test (always 0), so the grim-timeout
+    # branch could never fire. The exit status must be captured directly after grim.
+    assert "if ! timeout" not in src
+    assert src.index('-t png - > "$TMP_PNG"') < src.index('rc=$?\nif [[ "$rc" -ne 0 ]]; then')
 
 
 def test_helper_ships_beside_the_script_and_is_executable():

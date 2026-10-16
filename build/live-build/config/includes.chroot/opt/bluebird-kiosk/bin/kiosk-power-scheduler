@@ -62,12 +62,27 @@ CONF_PATH = Path("/etc/bluebird/kiosk.conf")
 KIOSK_USER = "bluebird-kiosk"
 
 
+BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
+
+
+def _boot_id() -> str:
+    """Per-boot token folded into the applied record. sway's socket path embeds its pid,
+    and a deterministic boot can hand out the same pid again — so {verb, sock} alone
+    cannot tell "same session, already applied" from "rebooted into the panel's
+    default-ON state with a stale 'off' record". Empty when unreadable, which the
+    comparison treats as never-applied (the safe, re-send direction)."""
+    try:
+        return BOOT_ID_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
 def _write_state(display_on: bool, reason: str, applied: "dict | None" = None) -> None:
     """Persist the last decision. scheduled_off is true only when the schedule
     blanked the panel — an incident override (display_on while off-hours) is
     NOT scheduled_off, so its screen is still captured + the fleet shows it.
 
-    `applied` is what _apply() actually pushed through sway ({dpms, sock, at}) or
+    `applied` is what _apply() actually pushed through sway ({dpms, sock, at, boot}) or
     {} when nothing was applied; the next run uses it to skip a redundant swaymsg."""
     try:
         STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -98,11 +113,13 @@ def _last_applied() -> dict:
     return applied if isinstance(applied, dict) else {}
 
 
-def _already_applied(prev: dict, dpms: str, sock: str, now: float) -> bool:
+def _already_applied(prev: dict, dpms: str, sock: str, now: float, boot: str = "") -> bool:
     """True iff the previous run positively applied the SAME verb through the SAME live
-    sway socket less than REASSERT_SECS ago. Anything else (first run, verb changed, sway
-    restarted => new socket path, last call failed => empty record, stale/garbage
-    timestamp) means re-send."""
+    sway socket, in THIS boot, less than REASSERT_SECS ago. Anything else (first run, verb
+    changed, sway restarted => new socket path, rebooted => new boot id, boot id
+    unreadable, last call failed => empty record, stale/garbage timestamp) means re-send."""
+    if not boot or prev.get("boot") != boot:
+        return False
     if prev.get("dpms") != dpms or prev.get("sock") != sock:
         return False
     try:
@@ -246,8 +263,8 @@ def _apply(state_on: bool) -> dict:
     """Bring the panel to `state_on` via swaymsg — but only when that differs from what
     the previous run actually applied (see _already_applied). Returns the `applied`
     record to persist: the previous one when the call was skipped as redundant, a fresh
-    {dpms, sock, at} on success, or {} when nothing was applied (no session, sudo or
-    swaymsg failure) so the NEXT run retries instead of trusting stale state."""
+    {dpms, sock, at, boot} on success, or {} when nothing was applied (no session, sudo
+    or swaymsg failure) so the NEXT run retries instead of trusting stale state."""
     try:
         uid = pwd.getpwnam(KIOSK_USER).pw_uid
     except KeyError:
@@ -258,8 +275,9 @@ def _apply(state_on: bool) -> dict:
         logger.info("no sway socket for uid %d yet; session not up — skipping", uid)
         return {}
     dpms = "on" if state_on else "off"
+    boot = _boot_id()
     prev = _last_applied()
-    if _already_applied(prev, dpms, sock, time.time()):
+    if _already_applied(prev, dpms, sock, time.time(), boot):
         logger.debug("display already dpms %s — not re-sent", dpms)
         return prev
     cmd = [
@@ -279,7 +297,7 @@ def _apply(state_on: bool) -> dict:
         )
         return {}
     logger.info("display dpms %s", dpms)
-    return {"dpms": dpms, "sock": sock, "at": int(time.time())}
+    return {"dpms": dpms, "sock": sock, "at": int(time.time()), "boot": boot}
 
 
 def main() -> int:

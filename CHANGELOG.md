@@ -15,7 +15,11 @@ kiosk update, so an operator can see what an update will install before confirmi
   safety net). Paired with a backend change that stops the kiosk's emergency poll from
   overlapping itself. Tunable from kiosk.conf: `SCREENSHOT_SCALE` (0.5),
   `SCREENSHOT_PNG_LEVEL` (1), `SCREENSHOT_IDLE_SECS` (30), `SCREENSHOT_MAX_DEFER_SECS`
-  (600). (No action needed; applies on update.)
+  (600). **"Screenshot now" from the fleet console is never deferred** — an operator
+  asking for a frame while someone is at the board gets it immediately. Also fixes a
+  long-standing quirk where a hung capture was logged as a generic failure instead of a
+  timeout, and makes the power scheduler re-send its on/off after a reboot even when
+  the display session looks identical. (No action needed; applies on update.)
 
 ## 2026-07-31
 - **The ✕ on the admin PIN screen now closes the panel.** Previously the close
