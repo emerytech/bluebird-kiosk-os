@@ -139,7 +139,15 @@ enable_non_free_firmware
 #   that into the single `linux-firmware` package (and Ubuntu's
 #   `firmware-linux` doesn't exist).
 if [[ "$IS_UBUNTU" -eq 1 ]]; then
-  CHROMIUM_PKG=chromium-browser
+  if [[ "${KIOSK_OFFLINE:-0}" == "1" ]]; then
+    # Offline install: the real apt-managed chromium is pre-gathered into the
+    # on-media apt pool (from the xtradeb PPA, at ISO-build time), so we install
+    # it directly by name — no snap transitional package, no add-apt-repository,
+    # no network. The xtradeb dance below is skipped (see KIOSK_OFFLINE there).
+    CHROMIUM_PKG=chromium
+  else
+    CHROMIUM_PKG=chromium-browser
+  fi
   FIRMWARE_PKGS=(linux-firmware)
 else
   CHROMIUM_PKG=chromium
@@ -222,29 +230,38 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${APT
 # build from the xtradeb PPA — community-maintained, ships /usr/bin/chromium
 # as a regular binary wrapper.
 if [[ "$IS_UBUNTU" -eq 1 ]]; then
-  log "Ubuntu: ensuring real apt chromium from xtradeb PPA (not the snap)"
-  # Yank the snap variant if a previous installer or apt brought it in.
-  # Only rm /usr/bin/chromium if it's a symlink (the snap-shim chain we
-  # used to install). A real apt-managed chromium leaves a regular file
-  # there and we must NOT delete it — apt won't repopulate it on
-  # re-install without --reinstall.
-  if [[ -L /usr/bin/chromium ]]; then
-    log "  removing stale /usr/bin/chromium symlink → $(readlink /usr/bin/chromium)"
-    rm -f /usr/bin/chromium
-  fi
-  rm -f /snap/bin/chromium 2>/dev/null || true
-  snap remove chromium 2>/dev/null || true
-  apt-get remove --purge -y chromium-browser 2>/dev/null || true
-  # Add the PPA (idempotent — add-apt-repository -y is safe to re-run).
-  apt-get install -y --no-install-recommends software-properties-common
-  add-apt-repository -y ppa:xtradeb/apps
-  apt-get update -qq
-  # Install (or reinstall to repopulate files if a previous run deleted the
-  # binary while leaving the package installed).
-  if dpkg -s chromium >/dev/null 2>&1 && [[ ! -x /usr/bin/chromium ]]; then
-    apt-get install --reinstall -y --no-install-recommends chromium
+  if [[ "${KIOSK_OFFLINE:-0}" == "1" ]]; then
+    # Offline: the real apt chromium was already installed from the on-media
+    # pool via APT_PACKAGES (CHROMIUM_PKG=chromium above) — no PPA, no network.
+    # Just clear any stray snap shim and fall through to the sandbox check.
+    log "Ubuntu (offline): using pool-provided apt chromium (no xtradeb PPA)"
+    if [[ -L /usr/bin/chromium ]]; then rm -f /usr/bin/chromium; fi
+    rm -f /snap/bin/chromium 2>/dev/null || true
   else
-    apt-get install -y --no-install-recommends chromium
+    log "Ubuntu: ensuring real apt chromium from xtradeb PPA (not the snap)"
+    # Yank the snap variant if a previous installer or apt brought it in.
+    # Only rm /usr/bin/chromium if it's a symlink (the snap-shim chain we
+    # used to install). A real apt-managed chromium leaves a regular file
+    # there and we must NOT delete it — apt won't repopulate it on
+    # re-install without --reinstall.
+    if [[ -L /usr/bin/chromium ]]; then
+      log "  removing stale /usr/bin/chromium symlink → $(readlink /usr/bin/chromium)"
+      rm -f /usr/bin/chromium
+    fi
+    rm -f /snap/bin/chromium 2>/dev/null || true
+    snap remove chromium 2>/dev/null || true
+    apt-get remove --purge -y chromium-browser 2>/dev/null || true
+    # Add the PPA (idempotent — add-apt-repository -y is safe to re-run).
+    apt-get install -y --no-install-recommends software-properties-common
+    add-apt-repository -y ppa:xtradeb/apps
+    apt-get update -qq
+    # Install (or reinstall to repopulate files if a previous run deleted the
+    # binary while leaving the package installed).
+    if dpkg -s chromium >/dev/null 2>&1 && [[ ! -x /usr/bin/chromium ]]; then
+      apt-get install --reinstall -y --no-install-recommends chromium
+    else
+      apt-get install -y --no-install-recommends chromium
+    fi
   fi
   if [[ ! -x /usr/bin/chromium ]]; then
     die "Ubuntu: xtradeb chromium install left no /usr/bin/chromium — investigate before continuing"
@@ -724,8 +741,15 @@ BACKEND_FOR_VERSION="$(
   printf '%s' "${BLUEBIRD_BACKEND:-https://bluebird-alerts.com}"
 )"
 log "recording installed version (from ${BACKEND_FOR_VERSION})"
-VERSION_JSON="$(curl -fsSL --max-time 10 \
-  "${BACKEND_FOR_VERSION}/api/public/kiosk-os/version" 2>/dev/null || true)"
+if [[ "${KIOSK_OFFLINE:-0}" == "1" ]]; then
+  # Offline install: the backend isn't reachable. Skip the probe (saves the
+  # 10s timeout); auto-update self-heals the recorded version on the first
+  # online tick after firstboot brings up WiFi.
+  VERSION_JSON=""
+else
+  VERSION_JSON="$(curl -fsSL --max-time 10 \
+    "${BACKEND_FOR_VERSION}/api/public/kiosk-os/version" 2>/dev/null || true)"
+fi
 RECORDED_VERSION=""
 if [[ -n "$VERSION_JSON" ]]; then
   # Parse JSON via python3 (always installed via apt list). Avoid jq —
