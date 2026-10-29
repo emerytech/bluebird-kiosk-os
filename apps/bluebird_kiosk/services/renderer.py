@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
-from .local_cache import KioskLocalCache
+from .local_cache import KioskLocalCache, media_revision
 
 
 def _row_sort_key(row: Dict[str, Any]) -> Tuple[str, int]:
@@ -39,17 +39,18 @@ def collect_slideshow_media(cache: KioskLocalCache) -> List[Dict[str, Any]]:
     rows = cache.list_rows("lw_media")
     out: List[Dict[str, Any]] = []
     for row in rows:
-        if row.get("published") is False:
+        if row.get("published") in (False, 0):
             continue
         media_id = row.get("id")
         if media_id is None:
             continue
-        blob = cache.get_media_blob(int(media_id))
+        blob = cache.valid_media_blob(int(media_id))
         if blob is None or not blob.get("file_path"):
             continue
         out.append(
             {
                 "id": int(media_id),
+                "version": media_revision(row),
                 "caption": row.get("caption") or "",
                 "alt_text": row.get("alt_text") or "",
                 "taken_at": row.get("taken_at") or "",
@@ -65,7 +66,7 @@ def resolve_media_file_path(
     """Return the on-disk path of a media blob, or None if the kiosk hasn't
     downloaded it (or the media row was tombstoned). Used by the blob route.
     """
-    blob = cache.get_media_blob(int(media_id))
+    blob = cache.valid_media_blob(int(media_id))
     if blob is None:
         return None
     file_path = blob.get("file_path")

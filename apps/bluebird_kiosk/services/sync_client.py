@@ -5,12 +5,12 @@ and drains the outbound event queue. Runs as a long-lived service via
 Three logical phases per tick:
 
   1. PULL: GET /api/public/kiosk/sync/manifest?since=<cursor>
-       Apply rows to KioskLocalCache. Tombstones (deleted_at set) cause
+       Apply validated rows and authoritative snapshot inventories. Tombstones (deleted_at set) cause
        the corresponding row to be removed locally; if the deleted row is
        a media row, the on-disk blob is also unlinked.
   2. FETCH: For every lw_media row in the cache whose file isn't in the
-       media_blobs table, GET /api/public/kiosk/sync/media/{id} and write
-       to /var/lib/bluebird-kiosk/media/<media_id>.bin. Skip on 304.
+       media_blobs table or with invalid/version-stale bytes, fetch unconditionally
+       and atomically replace /var/lib/bluebird-kiosk/media/<media_id>.bin.
   3. PUSH: POST any pending_events to /api/public/kiosk/sync/events.
        Delete from queue on success.
 
@@ -20,6 +20,8 @@ the next tick. The cursor only advances when the manifest call returns
 """
 from __future__ import annotations
 
+import hashlib
+import tempfile
 import logging
 import os
 import sys
@@ -31,7 +33,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from .. import __version__, config
-from .local_cache import KioskLocalCache
+from .local_cache import KioskLocalCache, media_revision
 
 
 logger = logging.getLogger("bluebird-kiosk.sync")
@@ -108,6 +110,7 @@ class SyncClient:
             }
         )
         self.request_timeout = request_timeout
+        self._purge_orphan_media()
 
     # ── Phase 1: PULL ────────────────────────────────────────────────────────
 
@@ -144,23 +147,41 @@ class SyncClient:
             logger.warning("manifest: non-json body")
             return {"ok": False, "error": "non_json"}
 
-        rows_by_table: Dict[str, List[Dict[str, Any]]] = data.get("rows") or {}
-        new_cursor: str = data.get("cursor_at") or ""
-
+        if not isinstance(data, dict):
+            return {"ok": False, "error": "invalid_manifest"}
+        rows_by_table = data.get("rows")
+        snapshots = data.get("snapshot_tables", [])
+        # Validate the entire response before any destructive reconciliation.
+        if (not isinstance(rows_by_table, dict) or not isinstance(snapshots, list)
+                or any(not isinstance(t, str) or not t.startswith("lw_") for t in rows_by_table)
+                or any(not isinstance(t, str) or t not in rows_by_table for t in snapshots)):
+            return {"ok": False, "error": "invalid_manifest"}
+        for rows in rows_by_table.values():
+            if (not isinstance(rows, list) or any(not isinstance(row, dict) or
+                    type(row.get("id")) is not int or not 0 < row["id"] < 2**63 for row in rows)
+                    or len({row["id"] for row in rows}) != len(rows)):
+                return {"ok": False, "error": "invalid_manifest"}
+        new_cursor = data.get("cursor_at") or ""
+        if not isinstance(new_cursor, str):
+            return {"ok": False, "error": "invalid_manifest"}
         total_up = 0
         total_del = 0
         for table_name, rows in rows_by_table.items():
-            up, dl = self.cache.apply_rows(table_name, rows)
-            total_up += up
-            total_del += dl
-            # If a media row was tombstoned, drop the on-disk blob.
-            if table_name == "lw_media" and dl > 0:
+            if table_name == "lw_media":
+                incoming = {row["id"]: row for row in rows}
+                for old in self.cache.list_rows("lw_media"):
+                    new = incoming.get(old["id"])
+                    if ((new is None and table_name in snapshots) or
+                            (new is not None and (new.get("deleted_at") or new.get("published") in (False, 0)
+                             or media_revision(old) != media_revision(new)))):
+                        self._purge_media_file(old["id"])
+                # Tombstones also remove a stray blob even if its mirror row was lost.
                 for row in rows:
-                    if row.get("deleted_at") and row.get("id") is not None:
-                        self._purge_media_file(int(row["id"]))
+                    if row.get("deleted_at"):
+                        self._purge_media_file(row["id"])
+        total_up, total_del = self.cache.apply_manifest(rows_by_table, snapshots, new_cursor)
+        self._purge_orphan_media()
 
-        if new_cursor:
-            self.cache.set_cursor(new_cursor)
         return {
             "ok": True,
             "new_cursor": new_cursor,
@@ -185,24 +206,13 @@ class SyncClient:
             media_id = media.get("id")
             if media_id is None:
                 continue
+            if media.get("published") in (False, 0):
+                self._purge_media_file(int(media_id))
+                continue
             existing = self.cache.get_media_blob(int(media_id))
-            if existing:
-                cached_path = Path(existing["file_path"])
-                # Field-confirmed 2026-06-05: it's possible for the
-                # previous tick to have left a 0-byte file (transient
-                # cloud error, network blip mid-stream, or a server
-                # response with empty body that we wrote as-is). The
-                # original check (.is_file()) skipped those forever,
-                # leaving the kiosk with empty placeholders that
-                # render as broken images in the dashboard. Treat any
-                # zero-byte file as a cache miss so it gets re-fetched.
-                if cached_path.is_file() and cached_path.stat().st_size > 0:
-                    # Already cached. Could revalidate via ETag but we
-                    # trust the cursor — if the media row's updated_at
-                    # changed, the manifest would have given us a new
-                    # row in this same tick and we'd re-fetch below.
-                    skipped += 1
-                    continue
+            if self.cache.valid_media_blob(int(media_id)):
+                skipped += 1
+                continue
             ok = self._download_media(int(media_id), existing)
             if ok:
                 fetched += 1
@@ -214,79 +224,104 @@ class SyncClient:
         self, media_id: int, existing: Optional[Dict[str, Any]]
     ) -> bool:
         url = f"{self.backend}/api/public/kiosk/sync/media/{media_id}"
-        headers: Dict[str, str] = {}
-        if existing and existing.get("etag"):
-            headers["If-None-Match"] = existing["etag"]
-        try:
-            resp = self.session.get(
-                url, headers=headers, timeout=self.request_timeout, stream=True
-            )
-        except requests.RequestException as exc:
-            logger.warning("media %s: network error: %s", media_id, exc)
-            return False
-        if resp.status_code == 304:
-            # Server agrees nothing changed; treat as success without touching
-            # the file.
-            return True
-        if resp.status_code == 404:
-            # Backend says the file is gone — local should reflect that.
-            self._purge_media_file(media_id)
-            return False
-        if resp.status_code >= 400:
-            logger.warning(
-                "media %s: backend rejected status=%s", media_id, resp.status_code
-            )
-            return False
-
+        # A missing/invalid/version-stale blob must be fetched unconditionally.
+        # An ETag describes server bytes; it is not proof that we still have them.
+        row = self.cache.get_row("lw_media", media_id) or {}
+        revision = media_revision(row)
         target = self.media_dir / f"{media_id}.bin"
+        temporary = None
+        resp = None
         try:
-            with open(target, "wb") as fh:
+            for attempt in range(2):
+                resp = self.session.get(url, headers={"Accept-Encoding": "identity"},
+                                        timeout=self.request_timeout, stream=True)
+                if resp.status_code != 304:
+                    break
+                if hasattr(resp, "close"):
+                    resp.close()
+            if resp.status_code == 304:
+                return False
+            if resp.status_code == 404:
+                self._purge_media_file(media_id)
+                return False
+            if resp.status_code != 200:
+                return False
+            if resp.headers.get("Content-Encoding", "identity").lower() not in ("", "identity"):
+                return False
+            content_type = resp.headers.get("Content-Type", "").split(";")[0].lower()
+            if content_type and not (content_type.startswith("image/") or content_type == "application/octet-stream"):
+                return False
+            server_version = resp.headers.get("X-Media-Version")
+            if row.get("media_version") and server_version and server_version != revision:
+                return False
+            declared = resp.headers.get("Content-Length")
+            expected = int(declared) if declared is not None else None
+            if expected is None and not resp.headers.get("X-Content-SHA256"):
+                return False
+            maximum = 64 * 1024 * 1024
+            if expected is not None and not 0 < expected <= maximum:
+                return False
+            fd, temporary = tempfile.mkstemp(prefix=f".{media_id}.", suffix=".part", dir=self.media_dir)
+            size = 0
+            digest = hashlib.sha256()
+            with os.fdopen(fd, "wb") as fh:
                 for chunk in resp.iter_content(chunk_size=64 * 1024):
                     if chunk:
+                        size += len(chunk)
+                        if size > maximum or (expected is not None and size > expected):
+                            raise ValueError("Oversize media response")
+                        digest.update(chunk)
                         fh.write(chunk)
-        except OSError as exc:
-            logger.warning("media %s: write failed: %s", media_id, exc)
+                fh.flush()
+                os.fsync(fh.fileno())
+            if size == 0 or (expected is not None and size != expected):
+                raise ValueError("Incomplete media response")
+            expected_hash = resp.headers.get("X-Content-SHA256")
+            if expected_hash and digest.hexdigest() != expected_hash:
+                raise ValueError("Media checksum mismatch")
+            current = self.cache.get_row("lw_media", media_id)
+            if not current or current.get("published") in (False, 0) or media_revision(current) != revision:
+                return False
+            os.replace(temporary, target)
+            temporary = None
+            return self.cache.record_media_blob(media_id, str(target), resp.headers.get("ETag"),
+                                                _now_iso(), source_version=revision)
+        except (OSError, ValueError, requests.RequestException) as exc:
+            logger.warning("media %s: download incomplete: %s", media_id, type(exc).__name__)
             return False
-
-        # Verify the file actually has content. We've seen the response
-        # iter_content() loop yield zero chunks for some IDs even on a
-        # 200 status (likely transient backend/CDN issues — the cloud
-        # had the bytes on retry). Without this check, the previous
-        # version recorded a media_blobs row for a 0-byte file and
-        # subsequently skipped that media forever. Field-confirmed
-        # 2026-06-05: 20 of NEN's 274 photos were 0 bytes for this
-        # reason.
-        try:
-            actual_size = target.stat().st_size
-        except OSError:
-            actual_size = 0
-        if actual_size == 0:
-            logger.warning(
-                "media %s: downloaded 0 bytes (status=%s, content-length=%s); "
-                "leaving as cache miss to retry next tick",
-                media_id, resp.status_code, resp.headers.get("Content-Length"),
-            )
-            try:
-                target.unlink(missing_ok=True)
-            except OSError:
-                pass
-            return False
-
-        self.cache.record_media_blob(
-            media_id=media_id,
-            file_path=str(target),
-            etag=resp.headers.get("ETag"),
-            fetched_at=_now_iso(),
-        )
-        return True
+        finally:
+            if resp is not None and hasattr(resp, "close"):
+                resp.close()
+            if temporary:
+                Path(temporary).unlink(missing_ok=True)
 
     def _purge_media_file(self, media_id: int) -> None:
-        file_path = self.cache.delete_media_blob(media_id)
-        if file_path:
+        # Never trust a stored absolute path as deletion authority.
+        self.cache.delete_media_blob(media_id)
+        try:
+            (self.media_dir / f"{int(media_id)}.bin").unlink(missing_ok=True)
+        except OSError as exc:
+            logger.warning("media %s: unlink failed: %s", media_id, exc)
+
+    def _purge_orphan_media(self):
+        # Retry unlink after a crash/failure between DB reconciliation and file IO.
+        keep = {int(r["id"]) for r in self.cache.list_rows("lw_media")
+                if not r.get("deleted_at") and r.get("published") not in (False, 0)}
+        for blob in self.cache.list_media_blobs():
+            if blob["media_id"] not in keep:
+                self._purge_media_file(blob["media_id"])
+        for path in self.media_dir.glob("*.bin"):
+            if path.stem.isdigit() and int(path.stem) not in keep:
+                self._purge_media_file(int(path.stem))
+
+        # Only our stale atomic-download staging names; never source/media files.
+        for path in self.media_dir.glob(".*.part"):
+            parts = path.name.split(".")
             try:
-                Path(file_path).unlink(missing_ok=True)
-            except OSError as exc:
-                logger.warning("media %s: unlink failed: %s", media_id, exc)
+                if len(parts) == 4 and parts[1].isdigit() and time.time() - path.lstat().st_mtime > 86400:
+                    path.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Could not remove stale photo staging file")
 
     # ── Phase 2b: FETCH background video ─────────────────────────────────────
 

@@ -28,6 +28,8 @@ the constructor for tests).
 """
 from __future__ import annotations
 
+import hashlib
+import os
 import json
 import sqlite3
 from pathlib import Path
@@ -95,6 +97,13 @@ CREATE TABLE IF NOT EXISTS rotation_video_blobs (
 """
 
 
+def media_revision(row):
+    if row.get("media_version"):
+        return str(row["media_version"])
+    return hashlib.sha256(json.dumps([row.get(k) for k in
+        ("file_path", "webp_path", "thumb_path", "updated_at")], separators=(",", ":")).encode()).hexdigest()
+
+
 class KioskLocalCache:
     def __init__(self, db_path: str | Path) -> None:
         self._db_path = str(db_path)
@@ -110,6 +119,11 @@ class KioskLocalCache:
         with self._connect() as conn:
             conn.execute("PRAGMA journal_mode=WAL;")
             conn.executescript(_SCHEMA_SQL)
+            conn.execute("BEGIN IMMEDIATE")
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(media_blobs)")}
+            for name, kind in (("source_version", "TEXT"), ("file_size", "INTEGER")):
+                if name not in cols:
+                    conn.execute("ALTER TABLE media_blobs ADD COLUMN " + name + " " + kind)
 
     # ── Cursor / sync state ──────────────────────────────────────────────────
 
@@ -198,6 +212,53 @@ class KioskLocalCache:
                 upserted += 1
         return upserted, deleted
 
+    def apply_manifest(self, tables, snapshots, cursor):
+        """Commit an entire validated snapshot and its cursor together."""
+        upserted = deleted = 0
+        with self._connect() as conn:
+            for table, rows in tables.items():
+                for row in rows:
+                    row_id = row["id"]
+                    if row.get("deleted_at"):
+                        deleted += conn.execute("DELETE FROM lw_mirror WHERE table_name=? AND row_id=?",
+                                                (table, row_id)).rowcount
+                    else:
+                        conn.execute("INSERT INTO lw_mirror(table_name,row_id,cursor_at,deleted_at,payload) "
+                            "VALUES(?,?,?,NULL,?) ON CONFLICT(table_name,row_id) DO UPDATE SET "
+                            "cursor_at=excluded.cursor_at,deleted_at=NULL,payload=excluded.payload",
+                            (table,row_id,str(row.get("updated_at") or row.get("created_at") or ""),
+                             json.dumps(row,separators=(",", ":"))))
+                        upserted += 1
+                if table in snapshots:
+                    keep = {r["id"] for r in rows if not r.get("deleted_at")}
+                    existing = [r[0] for r in conn.execute(
+                        "SELECT row_id FROM lw_mirror WHERE table_name=?", (table,))]
+                    removed = [i for i in existing if i not in keep]
+                    conn.executemany("DELETE FROM lw_mirror WHERE table_name=? AND row_id=?",
+                                     [(table,i) for i in removed])
+                    deleted += len(removed)
+            if cursor:
+                conn.execute("INSERT INTO sync_state(key,value) VALUES('cursor_at',?) "
+                             "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (cursor,))
+        return upserted, deleted
+
+    def valid_media_blob(self, media_id):
+        row = self.get_row("lw_media", media_id)
+        blob = self.get_media_blob(media_id)
+        if not row or row.get("deleted_at") or row.get("published") in (False, 0) or not blob:
+            return None
+        if blob.get("source_version") != media_revision(row):
+            return None
+        try:
+            p = Path(blob["file_path"])
+            if p.is_symlink() or not p.is_file() or p.stat().st_size <= 0:
+                return None
+            if p.stat().st_size != blob.get("file_size"):
+                return None
+        except OSError:
+            return None
+        return blob
+
     def list_rows(self, table_name: str) -> List[Dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -240,17 +301,35 @@ class KioskLocalCache:
         file_path: str,
         etag: Optional[str],
         fetched_at: str,
-    ) -> None:
+        source_version: Optional[str] = None,
+    ) -> bool:
         with self._connect() as conn:
+            if source_version is not None:
+                conn.execute("BEGIN IMMEDIATE")
+                current = conn.execute("SELECT payload FROM lw_mirror WHERE table_name='lw_media' AND row_id=?",
+                                       (int(media_id),)).fetchone()
+                current = json.loads(current[0]) if current else None
+                if (not current or current.get("published") in (False, 0)
+                        or media_revision(current) != source_version):
+                    return False
             conn.execute(
-                "INSERT INTO media_blobs (media_id, etag, file_path, fetched_at) "
-                "VALUES (?, ?, ?, ?) "
+                "INSERT INTO media_blobs (media_id, etag, file_path, fetched_at, source_version, file_size) "
+                "VALUES (?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(media_id) DO UPDATE SET "
                 "    etag = excluded.etag, "
                 "    file_path = excluded.file_path, "
-                "    fetched_at = excluded.fetched_at",
-                (int(media_id), etag, file_path, fetched_at),
+                "    fetched_at = excluded.fetched_at, "
+                "    source_version = excluded.source_version, file_size = excluded.file_size",
+                (int(media_id), etag, file_path, fetched_at,
+                 source_version or media_revision(self.get_row("lw_media", media_id) or {}),
+                 os.path.getsize(file_path) if os.path.isfile(file_path) else None),
             )
+
+        return True
+
+    def list_media_blobs(self):
+        with self._connect() as conn:
+            return [dict(r) for r in conn.execute("SELECT * FROM media_blobs")]
 
     def delete_media_blob(self, media_id: int) -> Optional[str]:
         """Remove the row, returning the on-disk file_path so the caller
