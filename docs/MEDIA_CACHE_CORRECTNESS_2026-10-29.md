@@ -96,3 +96,8 @@ merged and no deletion/retention executor was enabled by this work.
   preservation. The portable driver is retained with the local audit evidence.
 * Full backend CI and physical display/offline/reboot/load acceptance remain separate
   review gates. This work does not activate alarms or send notifications.
+
+
+## October30 follow-up
+
+Native true-thumbnail delivery, bounded combined cache and atomic background-video repair are prepared. Earlier notes saying video code is unchanged or no aggregate quota exists describe the first increment only. Read NATIVE_MEDIA_DELIVERY_2026-10-30.md. No deployment or physical acceptance.

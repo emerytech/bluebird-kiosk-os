@@ -451,10 +451,8 @@ def create_app() -> FastAPI:
             http://127.0.0.1:7311/legacy-wall/media/<id>/thumb
 
         Behavior here:
-          • variant=image OR thumb — we serve the same on-disk bytes
-            for both. The browser scales the bitmap for thumb spots.
-            Slightly more bandwidth than a true thumb but no extra
-            sync storage. (sync_client only downloads /image variants.)
+          • image and thumb have independent validated cache entries. A thumb
+            miss redirects to the cloud thumbnail, never a cached full original.
           • cache miss — 302 redirect to the cloud URL, so a missing
             item still appears in the dashboard, just slower for that
             single fetch. Operator-confirmed behavior 2026-06-04.
@@ -465,9 +463,9 @@ def create_app() -> FastAPI:
         if variant not in ("image", "thumb"):
             raise HTTPException(status_code=404, detail="unknown_variant")
         cache: KioskLocalCache = request.app.state.local_cache
-        file_path = resolve_media_file_path(cache, int(media_id))
+        file_path = resolve_media_file_path(cache, int(media_id), variant)
         version = request.query_params.get("v")
-        blob = cache.get_media_blob(int(media_id))
+        blob = cache.get_media_blob(int(media_id), variant)
         if version and (not blob or blob.get("source_version") != version):
             file_path = None
         # Treat a 0-byte cache file as a miss. sync_client.py SHOULD never
@@ -498,9 +496,10 @@ def create_app() -> FastAPI:
         if not backend or not slug:
             raise HTTPException(status_code=404, detail="no_backend_for_fallback")
         cloud_url = f"{backend}/{slug}/legacy-wall/media/{int(media_id)}/{variant}"
-        if version:
-            from urllib.parse import urlencode
-            cloud_url += "?" + urlencode({"v": version})
+        from urllib.parse import urlencode
+        query = {"v": version} if version else {}
+        if variant == "thumb": query["bounded"] = "1"
+        if query: cloud_url += "?" + urlencode(query)
         return RedirectResponse(url=cloud_url, status_code=302)
 
     @app.get("/legacy-wall/background-video/{kind}")

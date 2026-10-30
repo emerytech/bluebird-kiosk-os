@@ -61,12 +61,12 @@ def collect_slideshow_media(cache: KioskLocalCache) -> List[Dict[str, Any]]:
 
 
 def resolve_media_file_path(
-    cache: KioskLocalCache, media_id: int
+    cache: KioskLocalCache, media_id: int, variant="image"
 ) -> Optional[str]:
     """Return the on-disk path of a media blob, or None if the kiosk hasn't
     downloaded it (or the media row was tombstoned). Used by the blob route.
     """
-    blob = cache.valid_media_blob(int(media_id))
+    blob = cache.valid_media_blob(int(media_id), variant)
     if blob is None:
         return None
     file_path = blob.get("file_path")

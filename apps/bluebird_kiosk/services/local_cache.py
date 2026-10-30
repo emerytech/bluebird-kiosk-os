@@ -67,6 +67,12 @@ CREATE TABLE IF NOT EXISTS media_blobs (
     fetched_at  TEXT    NOT NULL
 );
 
+-- True thumbnails are independent of backward-compatible original indexes.
+CREATE TABLE IF NOT EXISTS media_thumbnails (
+    media_id INTEGER PRIMARY KEY, etag TEXT NULL, file_path TEXT NOT NULL,
+    fetched_at TEXT NOT NULL, source_version TEXT NULL, file_size INTEGER NULL
+);
+
 -- The Legacy Wall background VIDEO (one per tenant/kiosk). Keyed by 'kind'
 -- ('webm' | 'mp4' | 'poster') since there is only ever one video per kiosk.
 -- Downloaded proactively by sync_client (ETag-revalidated) and served from the
@@ -124,6 +130,10 @@ class KioskLocalCache:
             for name, kind in (("source_version", "TEXT"), ("file_size", "INTEGER")):
                 if name not in cols:
                     conn.execute("ALTER TABLE media_blobs ADD COLUMN " + name + " " + kind)
+            for table in ("video_blobs", "rotation_video_blobs"):
+                cols = {r[1] for r in conn.execute("PRAGMA table_info(" + table + ")")}
+                if "file_size" not in cols:
+                    conn.execute("ALTER TABLE " + table + " ADD COLUMN file_size INTEGER")
 
     # ── Cursor / sync state ──────────────────────────────────────────────────
 
@@ -242,9 +252,9 @@ class KioskLocalCache:
                              "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (cursor,))
         return upserted, deleted
 
-    def valid_media_blob(self, media_id):
+    def valid_media_blob(self, media_id, variant="image"):
         row = self.get_row("lw_media", media_id)
-        blob = self.get_media_blob(media_id)
+        blob = self.get_media_blob(media_id, variant)
         if not row or row.get("deleted_at") or row.get("published") in (False, 0) or not blob:
             return None
         if blob.get("source_version") != media_revision(row):
@@ -285,12 +295,19 @@ class KioskLocalCache:
             ).fetchone()
         return int(row["c"]) if row else 0
 
+    @staticmethod
+    def _media_table(variant):
+        if variant not in ("image", "thumb"):
+            raise ValueError("Unknown media variant")
+        return "media_thumbnails" if variant == "thumb" else "media_blobs"
+
     # ── Media blob tracking ──────────────────────────────────────────────────
 
-    def get_media_blob(self, media_id: int) -> Optional[Dict[str, Any]]:
+    def get_media_blob(self, media_id: int, variant="image") -> Optional[Dict[str, Any]]:
+        table = self._media_table(variant)
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT * FROM media_blobs WHERE media_id = ?",
+                "SELECT * FROM " + table + " WHERE media_id = ?",
                 (int(media_id),),
             ).fetchone()
         return dict(row) if row else None
@@ -302,7 +319,9 @@ class KioskLocalCache:
         etag: Optional[str],
         fetched_at: str,
         source_version: Optional[str] = None,
+        variant: str = "image",
     ) -> bool:
+        table = self._media_table(variant)
         with self._connect() as conn:
             if source_version is not None:
                 conn.execute("BEGIN IMMEDIATE")
@@ -313,7 +332,7 @@ class KioskLocalCache:
                         or media_revision(current) != source_version):
                     return False
             conn.execute(
-                "INSERT INTO media_blobs (media_id, etag, file_path, fetched_at, source_version, file_size) "
+                "INSERT INTO " + table + " (media_id, etag, file_path, fetched_at, source_version, file_size) "
                 "VALUES (?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(media_id) DO UPDATE SET "
                 "    etag = excluded.etag, "
@@ -327,22 +346,23 @@ class KioskLocalCache:
 
         return True
 
-    def list_media_blobs(self):
+    def list_media_blobs(self, variant="image"):
         with self._connect() as conn:
-            return [dict(r) for r in conn.execute("SELECT * FROM media_blobs")]
+            return [dict(r) for r in conn.execute("SELECT * FROM " + self._media_table(variant))]
 
-    def delete_media_blob(self, media_id: int) -> Optional[str]:
+    def delete_media_blob(self, media_id: int, variant="image") -> Optional[str]:
         """Remove the row, returning the on-disk file_path so the caller
         can unlink it. (We keep the file IO out of the cache module.)"""
+        table = self._media_table(variant)
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT file_path FROM media_blobs WHERE media_id = ?",
+                "SELECT file_path FROM " + table + " WHERE media_id = ?",
                 (int(media_id),),
             ).fetchone()
             if row is None:
                 return None
             conn.execute(
-                "DELETE FROM media_blobs WHERE media_id = ?", (int(media_id),)
+                "DELETE FROM " + table + " WHERE media_id = ?", (int(media_id),)
             )
         return row["file_path"]
 
@@ -365,13 +385,13 @@ class KioskLocalCache:
     ) -> None:
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO video_blobs (kind, etag, file_path, fetched_at) "
-                "VALUES (?, ?, ?, ?) "
+                "INSERT INTO video_blobs (kind, etag, file_path, fetched_at, file_size) "
+                "VALUES (?, ?, ?, ?, ?) "
                 "ON CONFLICT(kind) DO UPDATE SET "
                 "    etag = excluded.etag, "
                 "    file_path = excluded.file_path, "
-                "    fetched_at = excluded.fetched_at",
-                (kind, etag, file_path, fetched_at),
+                "    fetched_at = excluded.fetched_at, file_size = excluded.file_size",
+                (kind, etag, file_path, fetched_at, os.path.getsize(file_path) if os.path.isfile(file_path) else None),
             )
 
     def delete_video_blob(self, kind: str) -> Optional[str]:
@@ -417,13 +437,13 @@ class KioskLocalCache:
         with self._connect() as conn:
             conn.execute(
                 "INSERT INTO rotation_video_blobs "
-                "(video_id, kind, etag, file_path, fetched_at) "
-                "VALUES (?, ?, ?, ?, ?) "
+                "(video_id, kind, etag, file_path, fetched_at, file_size) "
+                "VALUES (?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(video_id, kind) DO UPDATE SET "
                 "    etag = excluded.etag, "
                 "    file_path = excluded.file_path, "
-                "    fetched_at = excluded.fetched_at",
-                (int(video_id), kind, etag, file_path, fetched_at),
+                "    fetched_at = excluded.fetched_at, file_size = excluded.file_size",
+                (int(video_id), kind, etag, file_path, fetched_at, os.path.getsize(file_path) if os.path.isfile(file_path) else None),
             )
 
     def delete_rotation_video_blob(

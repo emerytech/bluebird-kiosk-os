@@ -105,3 +105,8 @@ kiosk update, so an operator can see what an update will install before confirmi
   kiosk shows a full-screen incident notice, then clears automatically.
 - Local image cache + offline slideshow fallback so the wall keeps showing photos
   even if the network drops.
+
+
+## 2026-10-30 — Media delivery review candidate (not released)
+
+Independent negotiated thumbnails, combined configurable native photo/video byte budget/free-space reserve, deterministic working-set admission, additive cache schema and atomic length/checksum-validated video repair.109synthetic regressions pass including incident polling/preemption; no physical acceptance or deployment. See docs/NATIVE_MEDIA_DELIVERY_2026-10-30.md.
