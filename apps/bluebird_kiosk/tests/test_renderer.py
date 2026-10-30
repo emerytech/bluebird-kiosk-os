@@ -235,3 +235,24 @@ def test_bg_video_designated_and_rotation_are_separate(client):
     app.state.local_cache.record_rotation_video_blob(7, "webm", str(rot), '"r"', "t0")
     assert c.get("/legacy-wall/background-video/file").content == b"DESIG"
     assert c.get("/legacy-wall/background-video/file?video_id=7").content == b"ROT7"
+
+
+def test_photo_version_never_serves_old_blob_under_new_url(client, monkeypatch):
+    c, app, _ = client
+    import bluebird_kiosk.server as server
+    monkeypatch.setattr(server.config, "read_config", lambda: {"BLUEBIRD_BACKEND":"https://fictional.invalid", "SCHOOL_SLUG":"alpha"})
+    version = app.state.local_cache.get_media_blob(1)['source_version']
+    fresh = c.get('/legacy-wall/media/1/image?v='+version, follow_redirects=False)
+    assert fresh.status_code == 200 and fresh.headers['cache-control']=='private, no-store'
+    stale = c.get('/legacy-wall/media/1/image?v='+'a'*64, follow_redirects=False)
+    assert stale.status_code == 302 and ('v='+'a'*64) in stale.headers['location']
+    assert c.get('/legacy-wall/media/1?v='+'a'*64).status_code == 404
+
+
+def test_background_cache_miss_preserves_rotation_fallback(client, monkeypatch):
+    c, _, _ = client
+    import bluebird_kiosk.server as server
+    monkeypatch.setattr(server.config, "read_config", lambda: {"BLUEBIRD_BACKEND":"https://fictional.invalid", "SCHOOL_SLUG":"alpha"})
+    response = c.get('/legacy-wall/background-video/file?video_id=123', follow_redirects=False)
+    assert response.status_code == 302
+    assert response.headers['location'].endswith('/legacy-wall/background-video/file?video_id=123')

@@ -84,7 +84,7 @@ function nextSlide() {
     // Skip broken image gracefully on the next tick.
     incoming.classList.remove('is-visible');
   };
-  incoming.src = `/legacy-wall/media/${media.id}`;
+  incoming.src = `/legacy-wall/media/${media.id}?v=${encodeURIComponent(media.version || "")}`;
 
   els.caption.textContent = media.caption || media.alt_text || '';
   els.count.textContent = `${(state.idx === 0 ? state.media.length : state.idx)} of ${state.media.length}`;

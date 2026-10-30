@@ -5,12 +5,12 @@ and drains the outbound event queue. Runs as a long-lived service via
 Three logical phases per tick:
 
   1. PULL: GET /api/public/kiosk/sync/manifest?since=<cursor>
-       Apply rows to KioskLocalCache. Tombstones (deleted_at set) cause
+       Apply validated rows and authoritative snapshot inventories. Tombstones (deleted_at set) cause
        the corresponding row to be removed locally; if the deleted row is
        a media row, the on-disk blob is also unlinked.
   2. FETCH: For every lw_media row in the cache whose file isn't in the
-       media_blobs table, GET /api/public/kiosk/sync/media/{id} and write
-       to /var/lib/bluebird-kiosk/media/<media_id>.bin. Skip on 304.
+       media_blobs table or with invalid/version-stale bytes, fetch unconditionally
+       and atomically replace /var/lib/bluebird-kiosk/media/<media_id>.bin.
   3. PUSH: POST any pending_events to /api/public/kiosk/sync/events.
        Delete from queue on success.
 
@@ -20,6 +20,8 @@ the next tick. The cursor only advances when the manifest call returns
 """
 from __future__ import annotations
 
+import hashlib
+import tempfile
 import logging
 import os
 import sys
@@ -31,7 +33,8 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from .. import __version__, config
-from .local_cache import KioskLocalCache
+from .local_cache import KioskLocalCache, media_revision
+from .cache_budget import CacheBudget
 
 
 logger = logging.getLogger("bluebird-kiosk.sync")
@@ -90,6 +93,8 @@ class SyncClient:
         request_timeout: float = 30.0,
         slug: str = "",
         video_dir: Optional[Path] = None,
+        cache_max_bytes: Optional[int] = None,
+        cache_min_free_bytes: Optional[int] = None,
     ) -> None:
         self.backend = backend.rstrip("/")
         self.token = token
@@ -108,6 +113,13 @@ class SyncClient:
             }
         )
         self.request_timeout = request_timeout
+        settings = config.read_config()
+        self.budget = CacheBudget(self.media_dir, self.video_dir,
+            cache_max_bytes if cache_max_bytes is not None else int(settings.get("MEDIA_CACHE_MAX_BYTES", 4*1024**3)),
+            cache_min_free_bytes if cache_min_free_bytes is not None else int(settings.get("MEDIA_CACHE_MIN_FREE_BYTES", 1024**3)))
+        with self.budget.writer():
+            self.budget.enforce()
+        self._purge_orphan_media()
 
     # ── Phase 1: PULL ────────────────────────────────────────────────────────
 
@@ -144,23 +156,41 @@ class SyncClient:
             logger.warning("manifest: non-json body")
             return {"ok": False, "error": "non_json"}
 
-        rows_by_table: Dict[str, List[Dict[str, Any]]] = data.get("rows") or {}
-        new_cursor: str = data.get("cursor_at") or ""
-
+        if not isinstance(data, dict):
+            return {"ok": False, "error": "invalid_manifest"}
+        rows_by_table = data.get("rows")
+        snapshots = data.get("snapshot_tables", [])
+        # Validate the entire response before any destructive reconciliation.
+        if (not isinstance(rows_by_table, dict) or not isinstance(snapshots, list)
+                or any(not isinstance(t, str) or not t.startswith("lw_") for t in rows_by_table)
+                or any(not isinstance(t, str) or t not in rows_by_table for t in snapshots)):
+            return {"ok": False, "error": "invalid_manifest"}
+        for rows in rows_by_table.values():
+            if (not isinstance(rows, list) or any(not isinstance(row, dict) or
+                    type(row.get("id")) is not int or not 0 < row["id"] < 2**63 for row in rows)
+                    or len({row["id"] for row in rows}) != len(rows)):
+                return {"ok": False, "error": "invalid_manifest"}
+        new_cursor = data.get("cursor_at") or ""
+        if not isinstance(new_cursor, str):
+            return {"ok": False, "error": "invalid_manifest"}
         total_up = 0
         total_del = 0
         for table_name, rows in rows_by_table.items():
-            up, dl = self.cache.apply_rows(table_name, rows)
-            total_up += up
-            total_del += dl
-            # If a media row was tombstoned, drop the on-disk blob.
-            if table_name == "lw_media" and dl > 0:
+            if table_name == "lw_media":
+                incoming = {row["id"]: row for row in rows}
+                for old in self.cache.list_rows("lw_media"):
+                    new = incoming.get(old["id"])
+                    if ((new is None and table_name in snapshots) or
+                            (new is not None and (new.get("deleted_at") or new.get("published") in (False, 0)
+                             or media_revision(old) != media_revision(new)))):
+                        self._purge_media_file(old["id"])
+                # Tombstones also remove a stray blob even if its mirror row was lost.
                 for row in rows:
-                    if row.get("deleted_at") and row.get("id") is not None:
-                        self._purge_media_file(int(row["id"]))
+                    if row.get("deleted_at"):
+                        self._purge_media_file(row["id"])
+        total_up, total_del = self.cache.apply_manifest(rows_by_table, snapshots, new_cursor)
+        self._purge_orphan_media()
 
-        if new_cursor:
-            self.cache.set_cursor(new_cursor)
         return {
             "ok": True,
             "new_cursor": new_cursor,
@@ -179,31 +209,28 @@ class SyncClient:
         fetched = 0
         skipped = 0
         errored = 0
-        for media in rows:
+        attempts = {"thumb": 0, "image": 0}
+        # Complete thumbnail working set first. Old servers do not advertise
+        # variants, so never trust an old endpoint to honor ?variant=thumb.
+        for variant, media in [(v, m) for v in ("thumb", "image") for m in rows]:
+            if variant == "thumb" and "thumb" not in media.get("media_variants", []):
+                continue
             if fetched >= limit:
                 break
             media_id = media.get("id")
             if media_id is None:
                 continue
-            existing = self.cache.get_media_blob(int(media_id))
-            if existing:
-                cached_path = Path(existing["file_path"])
-                # Field-confirmed 2026-06-05: it's possible for the
-                # previous tick to have left a 0-byte file (transient
-                # cloud error, network blip mid-stream, or a server
-                # response with empty body that we wrote as-is). The
-                # original check (.is_file()) skipped those forever,
-                # leaving the kiosk with empty placeholders that
-                # render as broken images in the dashboard. Treat any
-                # zero-byte file as a cache miss so it gets re-fetched.
-                if cached_path.is_file() and cached_path.stat().st_size > 0:
-                    # Already cached. Could revalidate via ETag but we
-                    # trust the cursor — if the media row's updated_at
-                    # changed, the manifest would have given us a new
-                    # row in this same tick and we'd re-fetch below.
-                    skipped += 1
-                    continue
-            ok = self._download_media(int(media_id), existing)
+            if media.get("published") in (False, 0):
+                self._purge_media_file(int(media_id))
+                continue
+            existing = self.cache.get_media_blob(int(media_id), variant)
+            if self.cache.valid_media_blob(int(media_id), variant):
+                skipped += 1
+                continue
+            if attempts[variant] >= limit:
+                continue
+            attempts[variant] += 1
+            ok = self._download_media(int(media_id), existing, variant)
             if ok:
                 fetched += 1
             else:
@@ -211,82 +238,128 @@ class SyncClient:
         return {"fetched": fetched, "skipped": skipped, "errored": errored}
 
     def _download_media(
-        self, media_id: int, existing: Optional[Dict[str, Any]]
+        self, media_id: int, existing: Optional[Dict[str, Any]], variant="image"
     ) -> bool:
-        url = f"{self.backend}/api/public/kiosk/sync/media/{media_id}"
-        headers: Dict[str, str] = {}
-        if existing and existing.get("etag"):
-            headers["If-None-Match"] = existing["etag"]
-        try:
-            resp = self.session.get(
-                url, headers=headers, timeout=self.request_timeout, stream=True
-            )
-        except requests.RequestException as exc:
-            logger.warning("media %s: network error: %s", media_id, exc)
-            return False
-        if resp.status_code == 304:
-            # Server agrees nothing changed; treat as success without touching
-            # the file.
-            return True
-        if resp.status_code == 404:
-            # Backend says the file is gone — local should reflect that.
-            self._purge_media_file(media_id)
-            return False
-        if resp.status_code >= 400:
-            logger.warning(
-                "media %s: backend rejected status=%s", media_id, resp.status_code
-            )
-            return False
+        with self.budget.writer():
+            return self._download_media_locked(media_id, existing, variant)
 
-        target = self.media_dir / f"{media_id}.bin"
+    def _download_media_locked(self, media_id, existing, variant):
+        if variant not in ("image", "thumb"):
+            return False
+        url = f"{self.backend}/api/public/kiosk/sync/media/{media_id}"
+        if variant == "thumb":
+            url += "?variant=thumb"
+        # A missing/invalid/version-stale blob must be fetched unconditionally.
+        # An ETag describes server bytes; it is not proof that we still have them.
+        row = self.cache.get_row("lw_media", media_id) or {}
+        revision = media_revision(row)
+        target = self.media_dir / (f"{media_id}.thumb.bin" if variant == "thumb" else f"{media_id}.bin")
+        if existing and existing.get("file_size") and not self.budget.prepare(target, existing["file_size"]):
+            return False
+        temporary = None
+        resp = None
         try:
-            with open(target, "wb") as fh:
+            for attempt in range(2):
+                resp = self.session.get(url, headers={"Accept-Encoding": "identity"},
+                                        timeout=self.request_timeout, stream=True)
+                if resp.status_code != 304:
+                    break
+                if hasattr(resp, "close"):
+                    resp.close()
+            if resp.status_code == 304:
+                return False
+            if resp.status_code == 404:
+                if variant == "image":
+                    self._purge_media_file(media_id)
+                else:
+                    self.cache.delete_media_blob(media_id, "thumb")
+                    (self.media_dir / f"{media_id}.thumb.bin").unlink(missing_ok=True)
+                return False
+            if resp.status_code != 200:
+                return False
+            if resp.headers.get("Content-Encoding", "identity").lower() not in ("", "identity"):
+                return False
+            content_type = resp.headers.get("Content-Type", "").split(";")[0].lower()
+            if content_type and not (content_type.startswith("image/") or content_type == "application/octet-stream"):
+                return False
+            if variant == "thumb" and resp.headers.get("X-Media-Variant") != "thumb":
+                return False
+            server_version = resp.headers.get("X-Media-Version")
+            if row.get("media_version") and server_version and server_version != revision:
+                return False
+            declared = resp.headers.get("Content-Length")
+            expected = int(declared) if declared is not None else None
+            if expected is None and not resp.headers.get("X-Content-SHA256"):
+                return False
+            maximum = (2 if variant == "thumb" else 64) * 1024 * 1024
+            if expected is not None and not 0 < expected <= maximum:
+                return False
+            if not self.budget.prepare(target, expected if expected is not None else maximum):
+                return False
+            fd, temporary = tempfile.mkstemp(prefix=f".cache-{target.name}.", suffix=".part", dir=self.media_dir)
+            size = 0
+            digest = hashlib.sha256()
+            with os.fdopen(fd, "wb") as fh:
                 for chunk in resp.iter_content(chunk_size=64 * 1024):
                     if chunk:
+                        size += len(chunk)
+                        if size > maximum or (expected is not None and size > expected):
+                            raise ValueError("Oversize media response")
+                        self.budget.check_free(target.parent, len(chunk))
+                        digest.update(chunk)
                         fh.write(chunk)
-        except OSError as exc:
-            logger.warning("media %s: write failed: %s", media_id, exc)
+                fh.flush()
+                os.fsync(fh.fileno())
+            if size == 0 or (expected is not None and size != expected):
+                raise ValueError("Incomplete media response")
+            expected_hash = resp.headers.get("X-Content-SHA256")
+            if expected_hash and digest.hexdigest() != expected_hash:
+                raise ValueError("Media checksum mismatch")
+            current = self.cache.get_row("lw_media", media_id)
+            if not current or current.get("published") in (False, 0) or media_revision(current) != revision:
+                return False
+            os.replace(temporary, target)
+            temporary = None
+            return self.cache.record_media_blob(media_id, str(target), resp.headers.get("ETag"),
+                                                _now_iso(), source_version=revision, variant=variant)
+        except (OSError, ValueError, requests.RequestException) as exc:
+            logger.warning("media %s: download incomplete: %s", media_id, type(exc).__name__)
             return False
-
-        # Verify the file actually has content. We've seen the response
-        # iter_content() loop yield zero chunks for some IDs even on a
-        # 200 status (likely transient backend/CDN issues — the cloud
-        # had the bytes on retry). Without this check, the previous
-        # version recorded a media_blobs row for a 0-byte file and
-        # subsequently skipped that media forever. Field-confirmed
-        # 2026-06-05: 20 of NEN's 274 photos were 0 bytes for this
-        # reason.
-        try:
-            actual_size = target.stat().st_size
-        except OSError:
-            actual_size = 0
-        if actual_size == 0:
-            logger.warning(
-                "media %s: downloaded 0 bytes (status=%s, content-length=%s); "
-                "leaving as cache miss to retry next tick",
-                media_id, resp.status_code, resp.headers.get("Content-Length"),
-            )
-            try:
-                target.unlink(missing_ok=True)
-            except OSError:
-                pass
-            return False
-
-        self.cache.record_media_blob(
-            media_id=media_id,
-            file_path=str(target),
-            etag=resp.headers.get("ETag"),
-            fetched_at=_now_iso(),
-        )
-        return True
+        finally:
+            if resp is not None and hasattr(resp, "close"):
+                resp.close()
+            if temporary:
+                Path(temporary).unlink(missing_ok=True)
 
     def _purge_media_file(self, media_id: int) -> None:
-        file_path = self.cache.delete_media_blob(media_id)
-        if file_path:
+        # Never trust a stored absolute path as deletion authority.
+        for variant, suffix in (("image", ".bin"), ("thumb", ".thumb.bin")):
+            self.cache.delete_media_blob(media_id, variant)
             try:
-                Path(file_path).unlink(missing_ok=True)
+                (self.media_dir / f"{int(media_id)}{suffix}").unlink(missing_ok=True)
             except OSError as exc:
                 logger.warning("media %s: unlink failed: %s", media_id, exc)
+
+    def _purge_orphan_media(self):
+        # Retry unlink after a crash/failure between DB reconciliation and file IO.
+        keep = {int(r["id"]) for r in self.cache.list_rows("lw_media")
+                if not r.get("deleted_at") and r.get("published") not in (False, 0)}
+        for blob in self.cache.list_media_blobs() + self.cache.list_media_blobs("thumb"):
+            if blob["media_id"] not in keep:
+                self._purge_media_file(blob["media_id"])
+        for path in self.media_dir.glob("*.bin"):
+            identifier = path.name.removesuffix(".thumb.bin").removesuffix(".bin")
+            if identifier.isdigit() and int(identifier) not in keep:
+                self._purge_media_file(int(identifier))
+
+        # Only our stale atomic-download staging names; never source/media files.
+        for path in self.media_dir.glob(".*.part"):
+            parts = path.name.split(".")
+            try:
+                if len(parts) == 4 and parts[1].isdigit() and time.time() - path.lstat().st_mtime > 86400:
+                    path.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Could not remove stale photo staging file")
 
     # ── Phase 2b: FETCH background video ─────────────────────────────────────
 
@@ -344,57 +417,75 @@ class SyncClient:
         )
         return result
 
-    def _fetch_blob_to_file(
-        self, url: str, etag: Optional[str], fname: str, label: str
-    ) -> tuple:
-        """Shared GET→file for a video blob. Returns (outcome, new_etag) where
-        outcome is 'fetched' | 'skipped' | 'notfound' | 'errored'. On 'fetched'
-        a non-empty file is written to self.video_dir/fname and new_etag is the
-        response ETag; 'notfound' (404) signals the caller to purge. Never
-        raises — every failure is logged and soft-returned."""
-        headers: Dict[str, str] = {}
-        if etag:
-            headers["If-None-Match"] = etag
-        try:
-            resp = self.session.get(
-                url, headers=headers, timeout=self.request_timeout, stream=True
-            )
-        except requests.RequestException as exc:
-            logger.warning("%s: network error: %s", label, exc)
-            return ("errored", None)
-        if resp.status_code == 304:
-            return ("skipped", None)
-        if resp.status_code == 404:
-            return ("notfound", None)
-        if resp.status_code >= 400:
-            logger.warning("%s: backend status=%s", label, resp.status_code)
-            return ("errored", None)
-        target = self.video_dir / fname
-        try:
+    def _fetch_blob_to_file(self, url, etag, fname, label, file_size=None):
+        """Atomic bounded video repair/revalidation sharing the photo byte budget."""
+        with self.budget.writer():
+            target = self.video_dir / fname
+            if self.video_dir.is_symlink() or self.budget.rank(target) is None:
+                return ("errored", None)
             self.video_dir.mkdir(parents=True, exist_ok=True)
-            with open(target, "wb") as fh:
-                for chunk in resp.iter_content(chunk_size=64 * 1024):
-                    if chunk:
-                        fh.write(chunk)
-        except OSError as exc:
-            logger.warning("%s: write failed: %s", label, exc)
-            return ("errored", None)
-        try:
-            size = target.stat().st_size
-        except OSError:
-            size = 0
-        if size == 0:
+            valid = (not target.is_symlink() and target.is_file() and
+                     file_size is not None and target.stat().st_size == file_size and file_size > 0)
+            headers = {"Accept-Encoding": "identity"}
+            if valid and etag:
+                headers["If-None-Match"] = etag
+            if not valid and file_size and not self.budget.prepare(target, file_size):
+                return ("errored", None)
+            temporary = None
+            resp = None
             try:
-                target.unlink(missing_ok=True)
-            except OSError:
-                pass
-            return ("errored", None)
-        return ("fetched", resp.headers.get("ETag"))
+                for attempt in range(2):
+                    resp = self.session.get(url, headers=headers, timeout=self.request_timeout, stream=True)
+                    if resp.status_code != 304 or valid:
+                        break
+                    if hasattr(resp, "close"): resp.close()
+                if resp.status_code == 304:
+                    return ("skipped" if valid else "errored", None)
+                if resp.status_code == 404:
+                    return ("notfound", None)
+                if resp.status_code != 200 or resp.headers.get("Content-Encoding", "identity").lower() not in ("", "identity"):
+                    return ("errored", None)
+                content_type = resp.headers.get("Content-Type", "").split(";")[0].lower()
+                if content_type and not (content_type.startswith(("video/", "image/")) or content_type == "application/octet-stream"):
+                    return ("errored", None)
+                expected = int(resp.headers["Content-Length"]) if "Content-Length" in resp.headers else None
+                if expected is None and not resp.headers.get("X-Content-SHA256"):
+                    return ("errored", None)
+                maximum = 512 * 1024 * 1024
+                if expected is not None and not 0 < expected <= maximum:
+                    return ("errored", None)
+                if not self.budget.prepare(target, expected if expected is not None else maximum):
+                    return ("errored", None)
+                fd, temporary = tempfile.mkstemp(prefix=f".cache-{target.name}.", suffix=".part", dir=self.video_dir)
+                size = 0
+                digest = hashlib.sha256()
+                with os.fdopen(fd, "wb") as fh:
+                    for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                        if not chunk: continue
+                        size += len(chunk)
+                        if size > maximum or (expected is not None and size > expected):
+                            raise ValueError("Video exceeds admitted size")
+                        self.budget.check_free(target.parent, len(chunk))
+                        fh.write(chunk);digest.update(chunk)
+                    fh.flush();os.fsync(fh.fileno())
+                if not size or (expected is not None and size != expected):
+                    raise ValueError("Incomplete video")
+                checksum = resp.headers.get("X-Content-SHA256")
+                if checksum and digest.hexdigest() != checksum:
+                    raise ValueError("Video checksum mismatch")
+                os.replace(temporary, target);temporary = None
+                return ("fetched", resp.headers.get("ETag"))
+            except (OSError, ValueError, requests.RequestException) as exc:
+                logger.warning("%s: incomplete cache write: %s", label, type(exc).__name__)
+                return ("errored", None)
+            finally:
+                if resp is not None and hasattr(resp, "close"): resp.close()
+                if temporary: Path(temporary).unlink(missing_ok=True)
 
     def _download_video_part(self, kind: str, fname: str, url: str) -> str:
         existing = self.cache.get_video_blob(kind)
         outcome, new_etag = self._fetch_blob_to_file(
-            url, (existing or {}).get("etag"), fname, "bg-video %s" % kind
+            url, (existing or {}).get("etag"), fname, "bg-video %s" % kind, file_size=(existing or {}).get("file_size")
         )
         if outcome == "notfound":
             self._purge_video_part(kind)
@@ -409,12 +500,12 @@ class SyncClient:
         return outcome if outcome in ("fetched", "skipped") else "errored"
 
     def _purge_video_part(self, kind: str) -> None:
-        fp = self.cache.delete_video_blob(kind)
-        if fp:
-            try:
-                Path(fp).unlink(missing_ok=True)
-            except OSError:
-                pass
+        self.cache.delete_video_blob(kind)
+        if self.video_dir.is_symlink(): return
+        names = {k: name for _, k, name in _BG_VIDEO_PARTS}
+        if kind in names:
+            try: (self.video_dir / names[kind]).unlink(missing_ok=True)
+            except OSError: pass
 
     def _purge_background_video(self) -> int:
         purged = 0
@@ -477,6 +568,7 @@ class SyncClient:
             (existing or {}).get("etag"),
             fname,
             "rot-video %s/%s" % (video_id, kind),
+            file_size=(existing or {}).get("file_size"),
         )
         if outcome == "notfound":
             self._purge_rotation_part(video_id, kind)
@@ -492,28 +584,18 @@ class SyncClient:
         return outcome if outcome in ("fetched", "skipped") else "errored"
 
     def _purge_rotation_part(self, video_id: int, kind: str) -> None:
-        fp = self.cache.delete_rotation_video_blob(video_id, kind)
-        if fp:
-            try:
-                Path(fp).unlink(missing_ok=True)
-            except OSError:
-                pass
+        self.cache.delete_rotation_video_blob(video_id, kind)
+        if self.video_dir.is_symlink(): return
+        names = {k: name for _, k, name in _BG_VIDEO_PARTS}
+        if kind in names and int(video_id) >= 0:
+            try: (self.video_dir / f"rot-{int(video_id)}-{names[kind]}").unlink(missing_ok=True)
+            except OSError: pass
 
     def _purge_rotation_videos_except(self, keep_ids: set) -> int:
-        """Drop cached rotation videos whose id is no longer selected. Returns
-        the number of distinct videos purged."""
-        stale_ids = {
-            blob["video_id"]
-            for blob in self.cache.list_rotation_video_blobs()
-            if blob["video_id"] not in keep_ids
-        }
-        for vid in stale_ids:
-            for fp in self.cache.delete_rotation_video(vid):
-                try:
-                    Path(fp).unlink(missing_ok=True)
-                except OSError:
-                    pass
-        return len(stale_ids)
+        stale = [b for b in self.cache.list_rotation_video_blobs() if b["video_id"] not in keep_ids]
+        for blob in stale:
+            self._purge_rotation_part(blob["video_id"], blob["kind"])
+        return len({b["video_id"] for b in stale})
 
     # ── Phase 3: PUSH ────────────────────────────────────────────────────────
 

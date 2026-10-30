@@ -31,7 +31,9 @@ class FakeResponse:
         self.status_code = status_code
         self._json = json_body
         self._bytes = body_bytes or b""
-        self.headers = headers or {}
+        self.headers = dict(headers or {})
+        if body_bytes is not None:
+            self.headers.setdefault("Content-Length", str(len(body_bytes)))
         self.text = "" if json_body is None else "<json>"
 
     def json(self):

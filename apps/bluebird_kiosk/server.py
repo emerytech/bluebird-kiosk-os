@@ -422,12 +422,16 @@ def create_app() -> FastAPI:
     async def legacy_wall_media_blob(request: Request, media_id: int):
         cache: KioskLocalCache = request.app.state.local_cache
         file_path = resolve_media_file_path(cache, int(media_id))
+        version = request.query_params.get("v")
+        blob = cache.get_media_blob(int(media_id))
+        if version and (not blob or blob.get("source_version") != version):
+            file_path = None
         if not file_path or not os.path.isfile(file_path):
             raise HTTPException(status_code=404, detail="media_not_cached")
         return FileResponse(
             path=file_path,
             media_type=_sniff_media_type(file_path),
-            headers={"Cache-Control": "private, max-age=86400"},
+            headers={"Cache-Control": "private, no-store"},
         )
 
     @app.get("/legacy-wall/media/{media_id}/{variant}")
@@ -447,10 +451,8 @@ def create_app() -> FastAPI:
             http://127.0.0.1:7311/legacy-wall/media/<id>/thumb
 
         Behavior here:
-          • variant=image OR thumb — we serve the same on-disk bytes
-            for both. The browser scales the bitmap for thumb spots.
-            Slightly more bandwidth than a true thumb but no extra
-            sync storage. (sync_client only downloads /image variants.)
+          • image and thumb have independent validated cache entries. A thumb
+            miss redirects to the cloud thumbnail, never a cached full original.
           • cache miss — 302 redirect to the cloud URL, so a missing
             item still appears in the dashboard, just slower for that
             single fetch. Operator-confirmed behavior 2026-06-04.
@@ -461,7 +463,11 @@ def create_app() -> FastAPI:
         if variant not in ("image", "thumb"):
             raise HTTPException(status_code=404, detail="unknown_variant")
         cache: KioskLocalCache = request.app.state.local_cache
-        file_path = resolve_media_file_path(cache, int(media_id))
+        file_path = resolve_media_file_path(cache, int(media_id), variant)
+        version = request.query_params.get("v")
+        blob = cache.get_media_blob(int(media_id), variant)
+        if version and (not blob or blob.get("source_version") != version):
+            file_path = None
         # Treat a 0-byte cache file as a miss. sync_client.py SHOULD never
         # leave 0-byte files (we now verify size before recording the blob)
         # but the field saw 20 such files at NEN on 2026-06-05 from a
@@ -477,7 +483,7 @@ def create_app() -> FastAPI:
                 return FileResponse(
                     path=file_path,
                     media_type=_sniff_media_type(file_path),
-                    headers={"Cache-Control": "private, max-age=86400"},
+                    headers={"Cache-Control": "private, no-store"},
                 )
         # Cache miss — fall through to the cloud. The kiosk Chromium has
         # WAN to bluebird-alerts.com working at this point (we're serving
@@ -490,6 +496,10 @@ def create_app() -> FastAPI:
         if not backend or not slug:
             raise HTTPException(status_code=404, detail="no_backend_for_fallback")
         cloud_url = f"{backend}/{slug}/legacy-wall/media/{int(media_id)}/{variant}"
+        from urllib.parse import urlencode
+        query = {"v": version} if version else {}
+        if variant == "thumb": query["bounded"] = "1"
+        if query: cloud_url += "?" + urlencode(query)
         return RedirectResponse(url=cloud_url, status_code=302)
 
     @app.get("/legacy-wall/background-video/{kind}")

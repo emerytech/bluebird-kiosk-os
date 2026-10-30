@@ -5,12 +5,15 @@
     "action": {
       "type": "redirect",
       "redirect": {
-        "regexSubstitution": "http://127.0.0.1:7311/legacy-wall/media/\\1/\\2"
+        "regexSubstitution": "http://127.0.0.1:7311/legacy-wall/media/\\1/\\2\\3"
       }
     },
     "condition": {
-      "regexFilter": "^https://bluebird-alerts\\.com/[^/]+/legacy-wall/media/(\\d+)/(image|thumb)",
-      "resourceTypes": ["image", "xmlhttprequest"]
+      "regexFilter": "^https://bluebird-?alerts\\.com/[^/]+/legacy-wall/media/(\\d+)/(image|thumb)(\\?v=[a-f0-9]+)?$",
+      "resourceTypes": [
+        "image",
+        "xmlhttprequest"
+      ]
     }
   },
   {
@@ -24,7 +27,10 @@
     },
     "condition": {
       "regexFilter": "^https://bluebird-alerts\\.com/[^/]+/legacy-wall/background-video/(file|mp4|poster)",
-      "resourceTypes": ["media", "xmlhttprequest"]
+      "resourceTypes": [
+        "media",
+        "xmlhttprequest"
+      ]
     }
   }
 ]
